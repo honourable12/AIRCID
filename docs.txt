@@ -1,0 +1,213 @@
+---
+
+## **Problem Statement**
+
+**AI‑Enhanced Research Data Integration and Case Identification Platform**
+
+Our neurosurgical unit is building dedicated research databases for selected conditions (e.g., myelomeningocele, brain and spine trauma, infections, brain and spine tumors) using platforms such as REDCap. However, maintaining consistent, timely, and high‑quality data entry across all projects is challenging, especially given the busy clinical schedules of team members and research assistants. Additionally, identifying eligible patients prospectively during admission or surgery who meet specific research inclusion criteria remains a largely manual and error‑prone task, leading to missed opportunities for data capture in rare or acute conditions. We need an AI‑powered solution that can integrate multiple research instruments into a user‑friendly interface for standardized data entry, assist with real‑time case matching using EMR and clinical data, automate pre‑population of fields from existing hospital systems, provide built‑in basic statistical tools, and offer one‑click data export to platforms like SPSS, R, or Python.
+
+---
+
+# The direct problem statement from Korle-Bu (Problem statement 2 from the docs)
+
+AI Enhanced Research Data Integration and Case Identification Platform
+
+Our neurosurgical unit is building dedicated research databases for selected conditions (e.g.,
+myelomeningocele, brain and spine trauma, infections, brain and spine tumors) using platforms
+such as REDCap. However, maintaining consistent, timely, and high-quality data entry across all
+projects are challenging, especially given the busy clinical schedules of team members and
+research assistants.
+Additionally, identifying eligible patients prospectively during admission or surgery who meet
+specific research inclusion criteria remains a largely manual and error-prone task. This can lead
+to missed opportunities for data capture, especially in rare or acute conditions.
+We need an AI-powered solution that can:
+➢ Integrate multiple research instruments across projects into a user-friendly data interface
+for quick, standardized data entry
+➢ Assist with real-time case matching, using EMR and clinical data to automatically
+identify patients who meet defined inclusion/exclusion criteria for various ongoing
+studies
+➢ Support automated pre-population of fields (e.g., demographics, vitals, imaging, labs) by
+linking to existing hospital systems
+➢ Provide built-in basic statistical tools (descriptive stats, trend graphs, exportable summary
+tables)
+➢ Offer one-click data export into more advanced statistical platforms (e.g., SPSS, R,
+Python) for further analysis
+
+## **Proposed Solution**
+
+---
+
+Our AI-Enhanced Research Data Integration and Case Identification Platform is designed to transform the way neurosurgical research data is captured and used. It addresses the challenge of inconsistent and error-prone manual data entry across various research projects, as well as the difficulty of prospectively identifying eligible patients during admission or surgery. By automating data entry, the platform integrates information from multiple research tools and hospital systems into one easy-to-use interface. It pre-populates key fields such as demographics, vitals, imaging, and lab results, reducing manual workload and minimizing errors. Additionally, the system continuously monitors incoming clinical data to automatically flag patients who meet specific study criteria in real time. Built-in statistical tools allow users to quickly generate descriptive analytics, visualize trends, and export summary reports for more advanced analysis. This solution not only streamlines workflows and improves data quality but also helps ensure that critical cases are accurately identified, ultimately enhancing research outcomes and patient care.
+
+---
+
+## **Our Integrated Solution**
+
+Our solution employs a hybrid, modular architecture that leverages the strengths of multiple programming environments:
+
+1. **C# Core Integration**
+    - **Backend & API Services:**
+    The C# component is built with ASP.NET Core to serve as the centralized, secure backbone. It integrates hospital EMR systems using HL7/FHIR standards, aggregates research instrument data (e.g., from REDCap), and exposes RESTful endpoints for data access, pre-population, and study management.
+    - **Data Management & Security:**
+    Using Entity Framework Core, it will manage patient records, research criteria, audit logs, and ensure role‑based access control with HIPAA‑compliant security measures.
+2. **Python AI Microservices**
+    - **Real‑Time Case Matching & Analytics:**
+    Dedicated Python microservices (using FastAPI) handle the AI component. They deploy machine learning models trained on historical and live clinical data to flag patients meeting inclusion/exclusion criteria. Python scripts preprocess and clean the data using Pandas/NumPy, and analytics endpoints provide descriptive statistics, trend graphs, and report generation for research teams.
+    - **Inter‑Service Communication:**
+    These microservices interact with the C# backend to receive input data and return AI‑driven case matching outcomes via secure APIs and event‑driven messaging (using RabbitMQ).
+3. **Rust Performance Modules**
+    - **High‑Performance Data Processing:**
+    Rust handles performance‑intensive work such as real‑time data ingestion, filtering, and validation of large-scale historical datasets. Using Actix‑Web framework together with Tokio for asynchronous processing, Rust ensures that the system can handle heavy loads, guaranteeing fast, concurrent, and safe data processing.
+    - **Data Integrity & Concurrency:**
+    Rust’s strong type system and memory safety features further ensure that data is processed reliably, minimizing runtime errors during peak loads.
+4. **Frontend & User Experience Developer**
+    - **User Interface & Experience:**
+    To tie together the technical components and deliver a seamless interface, a Frontend Developer,will design and develop a modern, responsive web interface using technologies such as React or Blazor.
+    - **Integrated Dashboards & Reporting:**
+    Their work will include creating dashboards for case matching results, statistical visualization (employing libraries like Chart.js or D3.js), dynamic data entry forms with auto‑complete features, and simple one‑click export functions for further analysis in platforms like SPSS or R.
+    - **User‑Centric Design:**
+    This role also involves gathering input from clinicians and researchers to ensure that the UI meets their workflow needs, streamlines data entry, and provides clear visual insights for decision‑making.
+
+---
+
+## **Labor Division and Responsibilities**
+
+---
+
+### **C# Developer – Core Platform Builder**
+
+### **Role Overview**
+
+Responsible for developing the backbone of the platform, integrating hospital EMR systems, REDCap research databases, and other components. Must ensure the system meets security, scalability, and healthcare compliance requirements.
+
+### **Key Responsibilities**
+
+1. **Backend API Development**
+    - Develop secure, scalable RESTful APIs using ASP.NET Core.
+    - Provide endpoints for:
+        - Patient data retrieval (`/patients/{id}`)
+        - Research study management (`/studies`)
+        - Clinical data prepopulation (`/data-prepopulation`)
+2. **Database Design & Integration**
+    - Use Entity Framework Core to define and manage relational schemas.
+    - Design tables for:
+        - Patient demographics, vitals, lab/imaging data
+        - Research protocols and eligibility criteria
+        - Audit logs for access and changes
+    - Optimize queries for performance and reliability with large datasets.
+3. **Healthcare Standards Integration**
+    - Integrate with EMRs using HL7/FHIR via .NET SDKs.
+    - Implement FHIR-compliant features for seamless data exchange.
+4. **Security & Compliance**
+    - Implement RBAC using ASP.NET Identity.
+    - Ensure data encryption in transit (TLS/SSL) and at rest.
+    - Maintain HIPAA compliance and perform regular audits.
+5. **Frontend Collaboration**
+    - Work with the frontend team (if needed) using Blazor to ensure cohesive data flow and UI integration.
+
+### **Deliverables**
+
+- Fully functional and documented backend APIs
+- Scalable relational database schema
+- FHIR/HL7-compliant modules
+- Integrated RBAC system
+- Swagger/OpenAPI documentation and ER diagrams
+
+---
+
+### **Python Developer – AI & Analytics Engineer**
+
+### **Role Overview**
+
+Responsible for AI-powered microservices that enable case matching, data analytics, and real-time clinical decision support.
+
+### **Key Responsibilities**
+
+1. **AI Case Matching**
+    - Develop and train models (e.g., binary classifiers) to determine study eligibility.
+    - Deploy models using FastAPI microservices.
+2. **Data Preprocessing**
+    - Clean and standardize patient data using Pandas/NumPy.
+    - Build pipelines connecting EMR data to AI models.
+3. **Statistics & Analytics**
+    - Create endpoints to perform basic descriptive statistics (mean, median, SD).
+    - Visualize data trends with Matplotlib or Seaborn.
+4. **Integration with C# Backend**
+    - Consume backend APIs for patient and study data.
+    - Return AI insights (e.g., flagged cases) to the backend via secure endpoints.
+
+### **Deliverables**
+
+- Containerized AI microservices for matching and analytics
+- Statistical reporting tools and endpoints
+- JSON schema-based API documentation
+- Secure, optimized Python code
+
+---
+
+### **Rust Developer – High-Performance Data Engineer**
+
+### **Role Overview**
+
+Focuses on performance-critical modules for real-time data ingestion, validation, and processing at scale.
+
+### **Key Responsibilities**
+
+1. **Real-Time Data Processing**
+    - Use Tokio for concurrent processing of large datasets (e.g., historical patient data).
+2. **Data Validation**
+    - Validate incoming data from EMRs and research instruments using Rust's strong typing.
+3. **High-Performance API Development**
+    - Build APIs with Actix-Web or Rocket to handle:
+        - Historical data retrieval
+        - Complex filtering and transformation tasks
+4. **Inter-Service Integration**
+    - Interface with the C# backend for data intake.
+    - Forward processed results to Python AI services.
+
+### **Deliverables**
+
+- Rust microservices are optimized for concurrency and safety
+- Real-time APIs for high-throughput data
+- Benchmarking reports under load
+- Detailed technical documentation
+
+---
+
+### **Frontend & User Experience Developer**
+
+### **Role Overview**
+
+Builds the web interface for real-time case review, study management, and user interactions.
+
+### **Key Responsibilities**
+
+1. **UI/UX Design & Development**
+    - Develop a responsive UI using React or Blazor.
+    - Create dashboards for real-time alerts, data entry, and study tracking.
+2. **Data Visualization**
+    - Implement charts and graphs using D3.js or Chart.js for metrics, trends, and summaries.
+3. **Integration & Feedback**
+    - Ensure seamless integration with the backend and microservices.
+    - Gather and incorporate feedback from end-users (hospital staff, researchers) to improve usability.
+
+### **Deliverables**
+
+- Interactive, accessible frontend interface
+- Real-time data dashboards and forms
+- Responsive design across devices
+- Integrated frontend testing and user feedback reports
+
+---
+
+### **Cross-Team Communication & Workflow**
+
+- **Daily Standups** for progress alignment and issue tracking
+- **Containerization (Docker)** is enforced across services for seamless deployment
+- **Version-Controlled Repositories** with clear branching strategies (e.g., Git Flow)
+
+---
+
+## **Summary**
+
+Our AI‑Enhanced Research Data Integration and Case Identification Platform addresses the challenges of inconsistent data entry and manual patient identification in neurosurgical research. By leveraging a modular architecture—C# for core integration, Python for AI‑powered analytics, Rust for high‑performance processing, and a Frontend Developer for user experience—we create a comprehensive solution that streamlines clinical data capture, automates real‑time case matching, supports enriched analytics, and integrates seamlessly with existing systems.
