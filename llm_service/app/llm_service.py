@@ -3,9 +3,9 @@ from typing import Optional
 from groq import Groq
 from dotenv import load_dotenv
 import json
-import jsonschema # We'll need this for validation
+import jsonschema
 
-load_dotenv() # Load environment variables from .env
+load_dotenv()
 
 class LLMService:
     def __init__(self):
@@ -183,4 +183,58 @@ class LLMService:
                 "json_schema": {}, # Return empty schema on failure
                 "llm_raw_output": f"Error: {e}",
                 "error": f"Internal LLM communication error: {e}"
+            }
+            
+    def summarize_text(self, text_content: str, summary_context: str, target_length: Optional[str] = None) -> dict:
+        """
+        Uses the LLM to generate a concise summary of a given text block,
+        tailoring the prompt based on the summary context.
+        """
+        # --- Prompt Engineering for Summarization ---
+        base_prompt = "Please summarize the following text concisely and accurately."
+        context_specific_instructions = ""
+
+        if summary_context == "specialist_clinical":
+            context_specific_instructions = "Focus on critical clinical details, diagnoses, treatments, and patient status for a medical specialist. Use medical terminology where appropriate."
+        elif summary_context == "high_level_findings":
+            context_specific_instructions = "Provide a high-level overview of the main findings or conclusions. Omit minor details and focus on the most impactful information."
+        elif summary_context == "general":
+            context_specific_instructions = "Provide a general summary suitable for a broad audience."
+        # TODO: Add more context-specific instructions here as you define more SummaryContext types
+
+        length_instruction = f" Ensure the summary is {target_length}." if target_length else ""
+
+        full_prompt = f"""
+        {base_prompt} {context_specific_instructions}{length_instruction}
+
+        Here is the text to summarize:
+        ---
+        {text_content}
+        ---
+
+        Please provide only the summary text.
+        """
+
+        try:
+            chat_completion = self.client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": full_prompt,
+                    }
+                ],
+                model="meta-llama/llama-4-scout-17b-16e-instruct",  
+                temperature=0.3, 
+                max_tokens=512 
+            )
+            summary_output = chat_completion.choices[0].message.content
+            return {
+                "summary": summary_output.strip(),
+                "llm_raw_output": summary_output
+            }
+        except Exception as e:
+            print(f"Error communicating with LLM for text summarization: {e}")
+            return {
+                "summary": f"Error: Could not generate summary. {e}",
+                "llm_raw_output": f"Error: {e}"
             }
