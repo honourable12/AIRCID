@@ -1,6 +1,9 @@
 import os
+from typing import Optional
 from groq import Groq
 from dotenv import load_dotenv
+import json
+import jsonschema # We'll need this for validation
 
 load_dotenv() # Load environment variables from .env
 
@@ -59,24 +62,125 @@ class LLMService:
                         "content": prompt,
                     }
                 ],
-                model="llama3-8b-8192",  # Or another suitable Groq model like "mixtral-8x7b-32768"
-                response_format={"type": "json_object"}, # This is crucial for getting structured output
-                temperature=0.7, # Adjust creativity
-                max_tokens=1024 # Adjust based on expected output length
+                model="meta-llama/llama-4-scout-17b-16e-instruct", 
+                response_format={"type": "json_object"}, # structured output
+                temperature=0.7, 
+                max_tokens=1024 #output length
             )
             llm_output_content = chat_completion.choices[0].message.content
-            import json
-            # Attempt to parse the JSON directly
             parsed_output = json.loads(llm_output_content)
             return {
                 "clearer_wording": parsed_output.get("clearer_wording", "No clearer wording provided."),
                 "suggested_rules": parsed_output.get("suggested_rules", []),
-                "llm_raw_output": llm_output_content # Include raw output for debugging
+                "llm_raw_output": llm_output_content # Included raw output for debugging
             }
         except Exception as e:
-            print(f"Error communicating with LLM: {e}")
+            print(f"Error communicating with LLM for criteria augmentation: {e}")
             return {
                 "clearer_wording": f"Error: Could not process request. {e}",
                 "suggested_rules": [],
                 "llm_raw_output": f"Error: {e}"
+            }
+
+    def generate_json_schema(self, study_objectives: str, additional_context: Optional[str] = None) -> dict:
+        """
+        Instructs the LLM to generate a valid JSON Schema for a data collection form.
+        """
+        # --- Prompt Engineering for JSON Schema Generation ---
+        prompt = f"""
+        You are an expert in data modeling and JSON Schema.
+        Your task is to generate a valid JSON Schema for a data collection form
+        based on the provided study objectives. The schema should define the
+        fields, their types, descriptions, and any relevant validation rules
+        (e.g., required fields, min/max lengths, patterns, enums).
+
+        The output MUST be a complete and valid JSON Schema object.
+        Ensure it adheres to the JSON Schema Draft 7 standard (or a commonly
+        used draft like 2020-12).
+
+        Study Objectives:
+        "{study_objectives}"
+
+        {'Additional Context/Requirements: ' + additional_context if additional_context else ''}
+
+        Consider common data types like string, number, integer, boolean, array, object.
+        For example, if you need a date, use type "string" with "format": "date" or "date-time".
+        For multiple choice, use "enum" or an array of strings.
+
+        Example of a simple JSON Schema:
+        ```json
+        {{
+            "$schema": "[http://json-schema.org/draft-07/schema#](http://json-schema.org/draft-07/schema#)",
+            "title": "Patient Enrollment Form",
+            "description": "Schema for collecting patient enrollment data.",
+            "type": "object",
+            "properties": {{
+                "patientName": {{
+                    "type": "string",
+                    "description": "Full name of the patient.",
+                    "minLength": 3
+                }},
+                "age": {{
+                    "type": "integer",
+                    "description": "Age of the patient in years.",
+                    "minimum": 0,
+                    "maximum": 120
+                }},
+                "gender": {{
+                    "type": "string",
+                    "description": "Patient's gender.",
+                    "enum": ["Male", "Female", "Other", "Prefer not to say"]
+                }},
+                "diagnosisDate": {{
+                    "type": "string",
+                    "format": "date",
+                    "description": "Date of diagnosis."
+                }}
+            }},
+            "required": ["patientName", "age", "gender"]
+        }}
+        ```
+        Please provide only the JSON Schema output, without any additional text or formatting outside the JSON block.
+        """
+
+        try:
+            chat_completion = self.client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                response_format={"type": "json_object"}, # structured JSON output
+                temperature=0.7, 
+                max_tokens=2048 
+            )
+            llm_output_content = chat_completion.choices[0].message.content
+
+            # --- Validation Logic ---
+            try:
+                generated_schema = json.loads(llm_output_content)
+                # Validate the schema structure
+                if not isinstance(generated_schema, dict) or "$schema" not in generated_schema:
+                    raise ValueError("LLM output is not a valid JSON Schema structure.")
+
+                return {
+                    "json_schema": generated_schema,
+                    "llm_raw_output": llm_output_content
+                }
+            except (json.JSONDecodeError, ValueError, jsonschema.exceptions.ValidationError) as e:
+                print(f"LLM output is not valid JSON or JSON Schema: {e}")
+                return {
+                    "json_schema": {}, # Return empty schema on failure
+                    "llm_raw_output": llm_output_content, # included raw output for debugging
+                    "error": f"LLM generated invalid JSON or JSON Schema: {e}"
+                }
+
+        except Exception as e:
+            print(f"Error communicating with LLM for JSON Schema generation: {e}")
+            return {
+                "json_schema": {}, # Return empty schema on failure
+                "llm_raw_output": f"Error: {e}",
+                "error": f"Internal LLM communication error: {e}"
             }
