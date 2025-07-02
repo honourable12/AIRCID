@@ -4,7 +4,14 @@ from groq import Groq
 from dotenv import load_dotenv
 import json
 import jsonschema
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Chroma
+from app.db_utils import init_db
 
+CHROMA_PERSIST_DIRECTORY = "chroma_db"
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
+init_db()
 load_dotenv()
 
 class LLMService:
@@ -12,6 +19,36 @@ class LLMService:
         self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
         if not self.client.api_key:
             raise ValueError("GROQ_API_KEY not found in environment variables. Please set it in your .env file.")
+        if not hasattr(self, '_embeddings'):
+            print(f"Initializing embedding model for RAG queries: {EMBEDDING_MODEL_NAME}")
+            self._embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+
+        # Initialize ChromaDB vector store
+        if not hasattr(self, '_vectorstore'):
+            print(f"Loading ChromaDB from: {CHROMA_PERSIST_DIRECTORY}")
+            try:
+                # This will load the existing DB. If it's empty, it won't have docs.
+                # It will NOT create an empty one if the directory doesn't exist,
+                # but it will initialize an empty client if the collection is empty.
+                self._vectorstore = Chroma(
+                    persist_directory=CHROMA_PERSIST_DIRECTORY,
+                    embedding_function=self._embeddings
+                )
+                print("ChromaDB loaded successfully.")
+                # You can add a check here if self.vectorstore.get()['ids'] is empty to suggest indexing.
+            except Exception as e:
+                print(f"Error loading ChromaDB: {e}. Ensure utils/kb_builder.py or /documents/upload has been run to populate it.")
+                self._vectorstore = None # Handle case where DB isn't ready
+                # We could also create an empty one here if it's truly not found:
+                # self._vectorstore = Chroma(embedding_function=self._embeddings, persist_directory=CHROMA_PERSIST_DIRECTORY)
+
+    @property
+    def embeddings(self):
+        return self._embeddings
+
+    @property
+    def vectorstore(self):
+        return self._vectorstore
 
     def augment_criteria(self, researcher_input: str) -> dict:
         """
@@ -238,3 +275,96 @@ class LLMService:
                 "summary": f"Error: Could not generate summary. {e}",
                 "llm_raw_output": f"Error: {e}"
             }
+
+
+    def answer_question_with_rag(self, question: str, num_context_chunks: int = 5) -> dict:
+        """
+        Implements the RAG pipeline: retrieves context from vector DB and uses LLM to answer.
+        """
+        if not self.vectorstore:
+            return {
+                "answer": "Knowledge base not initialized or empty. Please upload documents.",
+                "sources": [],
+                "retrieved_chunks": [],
+                "llm_raw_output": "N/A",
+                "error": "Knowledge base unavailable"
+            }
+
+        try:
+            # 1. Retrieve relevant document chunks
+            print(f"Retrieving {num_context_chunks} relevant chunks for question: '{question}'")
+            # The documents returned by ChromaDB are LangChain Document objects,
+            # which have `page_content` (the text) and `metadata`.
+            retrieved_docs_with_scores = self.vectorstore.similarity_search_with_score(question, k=num_context_chunks)
+
+            context_texts = []
+            source_list = []
+            retrieved_chunks_content = []
+
+            for doc, score in retrieved_docs_with_scores:
+                context_texts.append(doc.page_content)
+                retrieved_chunks_content.append(doc.page_content) # Store raw chunk content for response
+
+                # Extract source information from metadata, which now includes 'db_id' and 'filename'
+                source_info = doc.metadata.get('source', 'Unknown Source')
+                # You can enrich this further if 'page' or other metadata were stored during indexing
+                # Example: source_path = doc.metadata.get('source_path', 'N/A')
+                # page_number = doc.metadata.get('page', 'N/A')
+                # source_list.append(f"{source_info} (Path: {source_path}, Page: {page_number})")
+                source_list.append(source_info) # Use the source field as indexed
+
+                print(f"  - Retrieved chunk (Score: {score:.4f}): {doc.page_content[:100]}... (Source: {source_info})")
+
+            context_string = "\n\n".join(context_texts)
+            unique_sources = list(set(source_list)) # Get unique sources
+
+            # 3. Prompt Engineering: Construct RAG prompt
+            rag_prompt = f"""
+            You are a helpful and knowledgeable assistant.
+            Use the following pieces of context to answer the user's question.
+            If you don't know the answer based on the provided context,
+            simply state that you cannot find the answer in the provided information.
+            Do NOT try to make up an answer.
+
+            Context:
+            ---
+            {context_string}
+            ---
+
+            Question: {question}
+
+            Answer:
+            """
+
+            # 4. Send the constructed prompt to the LLM
+            print("Sending RAG prompt to LLM...")
+            chat_completion = self.client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": rag_prompt,
+                    }
+                ],
+                model="llama3-8b-8192",  # Use a suitable Groq model
+                temperature=0.2, # Lower temperature for more factual, less creative answers
+                max_tokens=1024 # Adjust based on expected answer length
+            )
+            llm_answer = chat_completion.choices[0].message.content.strip()
+
+            return {
+                "answer": llm_answer,
+                "sources": unique_sources,
+                "retrieved_chunks": retrieved_chunks_content,
+                "llm_raw_output": llm_answer
+            }
+
+        except Exception as e:
+            print(f"Error during RAG pipeline execution: {e}")
+            return {
+                "answer": f"An error occurred while trying to answer your question: {e}",
+                "sources": [],
+                "retrieved_chunks": [],
+                "llm_raw_output": f"Error: {e}",
+                "error": str(e)
+            }
+            
