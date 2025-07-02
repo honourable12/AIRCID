@@ -1,7 +1,8 @@
 [project]
 name = "llm-service"
 version = "0.1.0"
-description = "Add your description here"
+description = "FastAPI LLM application with RAG, form generation, summarization, and criteria augmentation."
+authors = [{email = "neequayephilipanash@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -19,3 +20,13 @@ dependencies = [
     "sqlalchemy>=2.0.41",
     "uvicorn>=0.34.3",
 ]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest==8.2.2",
+    "pytest-asyncio==0.23.6",
+    "httpx==0.27.0",
+]
+[tool.pytest.ini_options]
+pythonpath = "."
+asyncio_mode = "auto"
