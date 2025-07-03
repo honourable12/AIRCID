@@ -1,0 +1,326 @@
+# This file contains cURL commands to test the various endpoints of the LLM service.
+# Before running the commands, make sure the FastAPI server is running.
+# You can start the server with the command: uvicorn main:app --reload
+
+# -------------------------------------
+# Authentication
+# -------------------------------------
+
+# First, obtain a JWT token. This token is required for most endpoints.
+# The token is valid for a limited time (default is 30 minutes).
+# You can generate a token with different roles, e.g., "researcher" or "admin".
+
+# To get a token and store it in an environment variable:
+# (Replace with your actual token after running the command)
+export TOKEN=$(curl -X POST "http://127.0.0.1:8000/token" -H "Content-Type: application/json" -d '''{"user_id": "testuser", "username": "Test User", "roles": ["researcher", "admin"]}''' | python -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+echo "Token: $TOKEN"
+
+# Expected Response:
+# {
+#   "access_token": "your.jwt.token",
+#   "token_type": "bearer"
+# }
+
+# -------------------------------------
+# Documents API (/documents)
+# -------------------------------------
+
+# Upload a document (Admin only)
+# Replace '''@/path/to/your/document.pdf''' with the actual file path.
+curl -X POST "http://127.0.0.1:8000/documents/upload" \
+-H "Authorization: Bearer $TOKEN" \
+-F "file=@/path/to/your/document.pdf"
+
+# Expected Response:
+# {
+#   "message": "Document uploaded and indexed successfully",
+#   "document_id": 1,
+#   "filename": "document.pdf",
+#   "indexed_chunks": 5
+# }
+
+# List all uploaded documents
+curl -X GET "http://127.0.0.1:8000/documents/list" \
+-H "Authorization: Bearer $TOKEN"
+
+# Expected Response:
+# [
+#   {
+#     "id": 1,
+#     "filename": "document.pdf",
+#     "file_type": "application/pdf",
+#     "uploaded_at": "2025-07-03T12:00:00Z"
+#   }
+# ]
+
+# Get a specific document by ID (Admin or Researcher)
+# Replace {document_id} with a valid document ID.
+curl -X GET "http://127.0.0.1:8000/documents/1" \
+-H "Authorization: Bearer $TOKEN"
+
+# Expected Response:
+# {
+#   "id": 1,
+#   "filename": "document.pdf",
+#   "file_type": "application/pdf",
+#   "content": "This is the content of the PDF.",
+#   "uploaded_at": "2025-07-03T12:00:00Z"
+# }
+
+# Delete a document by ID (Admin only)
+# Replace {document_id} with a valid document ID.
+curl -X DELETE "http://127.0.0.1:8000/documents/1" \
+-H "Authorization: Bearer $TOKEN"
+
+# Expected Response:
+# {
+#   "message": "Document 1 deleted successfully from DB and ChromaDB."
+# }
+
+# -------------------------------------
+# Q&A API (/qna)
+# -------------------------------------
+
+# Ask a question (RAG)
+curl -X POST "http://127.0.0.1:8000/qna/ask" \
+-H "Content-Type: application/json" \
+-d '''{
+  "question": "What are the main findings of the study?",
+  "num_context_chunks": 3,
+  "chat_history": [
+    {"role": "user", "content": "Tell me about the clinical trial."},
+    {"role": "assistant", "content": "It is a study on the effects of a new drug."}
+  ]
+}'''
+
+# Expected Response:
+# {
+#   "answer": "The main findings of the study are...",
+#   "sources": ["DB_ID:1 - document.pdf"],
+#   "retrieved_chunks": ["chunk1_content", "chunk2_content"],
+#   "llm_raw_output": "...",
+#   "history_summarized": false
+# }
+
+# -------------------------------------
+# Criteria Augmentation API (/criteria)
+# -------------------------------------
+
+# Augment clinical trial criteria (Researcher or Admin)
+curl -X POST "http://127.0.0.1:8000/criteria/augment" \
+-H "Authorization: Bearer $TOKEN" \
+-H "Content-Type: application/json" \
+-d '''{
+  "researcher_input": "Patients must be over 18 years old and have a history of hypertension."
+}'''
+
+# Expected Response:
+# {
+#   "clearer_wording": "Participants must be 18 years of age or older with a documented medical history of hypertension.",
+#   "suggested_rules": ["age >= 18", "condition = 'hypertension'"],
+#   "version_id": 1,
+#   "version_number": 1,
+#   "original_input_hash": "some_hash_value",
+#   "llm_model_used": "groq/llama3-70b-8192",
+#   "version_timestamp": "2025-07-03T12:00:00Z",
+#   "modified_by": "LLM",
+#   "refinement_of_version_id": null
+# }
+
+# Refine an existing criteria version (Researcher or Admin)
+# Replace {version_id} with a valid version ID.
+curl -X POST "http://127.0.0.1:8000/criteria/versions/1/refine" \
+-H "Authorization: Bearer $TOKEN" \
+-H "Content-Type: application/json" \
+-d '''{
+  "refined_output": {
+    "clearer_wording": "Participants must be 18 years of age or older with a documented medical history of hypertension.",
+    "suggested_rules": [
+      "age >= 18",
+      "condition = 'hypertension'"
+    ]
+  }
+}'''
+
+# Expected Response:
+# {
+#   "clearer_wording": "Participants must be 18 years of age or older with a documented medical history of hypertension.",
+#   "suggested_rules": ["age >= 18", "condition = 'hypertension'"],
+#   "version_id": 2,
+#   "version_number": 2,
+#   "original_input_hash": "some_hash_value",
+#   "llm_model_used": "researcher Refined",
+#   "version_timestamp": "2025-07-03T12:00:00Z",
+#   "modified_by": "researcher",
+#   "refinement_of_version_id": 1
+# }
+
+# Get a specific criteria version by ID (Researcher or Admin)
+# Replace {version_id} with a valid version ID.
+curl -X GET "http://127.0.0.1:8000/criteria/versions/1" \
+-H "Authorization: Bearer $TOKEN"
+
+# Expected Response:
+# {
+#   "version_id": 1,
+#   "version_number": 1,
+#   "original_input": "Patients must be over 18 years old and have a history of hypertension.",
+#   "llm_output": {
+#     "clearer_wording": "Participants must be 18 years of age or older with a documented medical history of hypertension.",
+#     "suggested_rules": ["age >= 18", "condition = 'hypertension'"]
+#   },
+#   "llm_model_used": "groq/llama3-70b-8192",
+#   "version_timestamp": "2025-07-03T12:00:00Z",
+#   "modified_by": "LLM",
+#   "refinement_of_version_id": null
+# }
+
+# Get all criteria versions for a given input hash (Researcher or Admin)
+# Replace {input_hash} with a valid hash.
+curl -X GET "http://127.0.0.1:8000/criteria/history/by_input_hash/some_hash_value" \
+-H "Authorization: Bearer $TOKEN"
+
+# Expected Response:
+# [
+#   {
+#     "version_id": 1,
+#     "version_number": 1,
+#     ...
+#   },
+#   {
+#     "version_id": 2,
+#     "version_number": 2,
+#     ...
+#   }
+# ]
+
+# Get the latest criteria version for each unique input (Researcher or Admin)
+curl -X GET "http://127.0.0.1:8000/criteria/versions/latest" \
+-H "Authorization: Bearer $TOKEN"
+
+# Expected Response:
+# [
+#   {
+#     "version_id": 2,
+#     "version_number": 2,
+#     ...
+#   }
+# ]
+
+# -------------------------------------
+# Form Generation API (/forms)
+# -------------------------------------
+
+# Generate a form schema (Researcher or Admin)
+curl -X POST "http://127.0.0.1:8000/forms/generate" \
+-H "Authorization: Bearer $TOKEN" \
+-H "Content-Type: application/json" \
+-d '''{
+  "study_objectives": "To collect patient demographics and baseline health metrics."
+}'''
+
+# Expected Response:
+# {
+#   "json_schema": {
+#     "title": "Patient Demographics",
+#     "type": "object",
+#     "properties": {
+#       "full_name": {"type": "string"},
+#       "age": {"type": "number"}
+#     }
+#   },
+#   "version_id": 1,
+#   "version_number": 1,
+#   ...
+# }
+
+# Refine an existing form version (Researcher or Admin)
+# Replace {version_id} with a valid version ID.
+curl -X POST "http://127.0.0.1:8000/forms/versions/1/refine" \
+-H "Authorization: Bearer $TOKEN" \
+-H "Content-Type: application/json" \
+-d '''{
+  "refined_output": {
+    "title": "Patient Intake Form",
+    "type": "object",
+    "properties": {
+      "full_name": {"type": "string"},
+      "age": {"type": "number"},
+      "is_smoker": {"type": "boolean"}
+    }
+  }
+}'''
+
+# Expected Response:
+# {
+#   "json_schema": {
+#     "title": "Patient Intake Form",
+#     ...
+#   },
+#   "version_id": 2,
+#   "version_number": 2,
+#   ...
+# }
+
+# Get a specific form version by ID (Researcher or Admin)
+# Replace {version_id} with a valid version ID.
+curl -X GET "http://127.0.0.1:8000/forms/versions/1" \
+-H "Authorization: Bearer $TOKEN"
+
+# Expected Response:
+# {
+#   "version_id": 1,
+#   "version_number": 1,
+#   "original_input": "To collect patient demographics and baseline health metrics.",
+#   "llm_output_json_schema": {
+#     "title": "Patient Demographics",
+#     ...
+#   },
+#   ...
+# }
+
+# Get all form versions for a given input hash (Researcher or Admin)
+# Replace {input_hash} with a valid hash.
+curl -X GET "http://127.0.0.1:8000/forms/history/by_input_hash/some_hash_value" \
+-H "Authorization: Bearer $TOKEN"
+
+# Expected Response:
+# [
+#   {
+#     "version_id": 1,
+#     "version_number": 1,
+#     ...
+#   }
+# ]
+
+# Get the latest form version for each unique input (Researcher or Admin)
+curl -X GET "http://127.0.0.1:8000/forms/versions/latest" \
+-H "Authorization: Bearer $TOKEN"
+
+# Expected Response:
+# [
+#   {
+#     "version_id": 2,
+#     "version_number": 2,
+#     ...
+#   }
+# ]
+
+# -------------------------------------
+# Text Summarization API (/text)
+# -------------------------------------
+
+# Summarize a block of text
+curl -X POST "http://127.0.0.1:8000/text/summarize" \
+-H "Content-Type: application/json" \
+-d '''{
+  "text_content": "This is a long text about a clinical trial...",
+  "summary_context": "briefing",
+  "target_length": "1 paragraph"
+}'''
+
+# Expected Response:
+# {
+#   "summary": "This is a summary of the clinical trial.",
+#   "llm_raw_output": "..."
+# }
