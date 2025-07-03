@@ -130,5 +130,5 @@ async def refine_criteria_version(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
-# (Ensure existing GET endpoints like /versions/{version_id}, /history/by_input_hash/{input_hash}, /versions/latest
+# TODO (Ensure GET endpoints like /versions/{version_id}, /history/by_input_hash/{input_hash}, /versions/latest
 # are updated to correctly return the 'modified_by' and 'refinement_of_version_id' fields from the database.)

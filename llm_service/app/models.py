@@ -43,7 +43,7 @@ class FormVersionDetails(BaseModel):
     refinement_of_version_id: Optional[int] = Field(None, description="The ID of the version this content refined, if applicable.")
 
 #models for Smart Form Generation
-class FormGenerateRequest(BaseModel):
+class FormGenerationRequest(BaseModel):
     study_objectives: str = Field(..., description="A description of the study's objectives, used to generate the form schema.")
     additional_context: Optional[str] = Field(None, description="Optional additional context or requirements for the form (e.g., specific field types, validation rules).")
 

@@ -26,8 +26,8 @@ def get_embedding_model():
         get_embedding_model.model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
     return get_embedding_model.model
 
-def load_documents_from_db(db : Session) -> List[LangchainDocument]:
-    db_documents = db.query(documents).all()
+def load_documents_from_db(db : Session) -> List[LangChainDocument]:
+    db_documents = db.query(Document).all()
     langchain_documents = []
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=500,
@@ -62,7 +62,7 @@ def load_documents_from_db(db : Session) -> List[LangchainDocument]:
             for i, chunk in enumerate(chunks):
                 chunk_metadata = {**metadata, "chunk_id": i + 1}
                 langchain_documents.append(
-                    LangChainDocumen(page_content=chunk, metadata=chunk_metadata)
+                    LangChainDocument(page_content=chunk, metadata=chunk_metadata)
                 )
     return langchain_documents
 
