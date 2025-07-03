@@ -7,11 +7,11 @@ from dotenv import load_dotenv
 from app.db_utils import init_db, get_db, Document
 from sqlalchemy.orm import Session
 from app.api import documents, qna, criteria, forms, text
-from app.security import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, User, role_required # NEW: Import security functions
+from app.security import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, User, role_required
 from datetime import timedelta
 
 load_dotenv()
-os.environ.setdefault("JWT_SECRET_KEY", "your_default_secret_key")  # Set a default secret key if not provided
+os.environ.setdefault("JWT_SECRET_KEY", "your_default_secret_key") 
 
 app = FastAPI(
     title="LLM Microservice",
@@ -35,11 +35,6 @@ async def login_for_access_token(
     username: str = "Test User",
     roles: List[str] = ["researcher"]
 ):
-    """
-    Generates a JWT token for testing purposes.
-    Provide a user_id, username, and a list of roles to include in the token.
-    Example roles: `["admin"]`, `["researcher"]`, `["guest"]`.
-    """
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user_id, "username": username, "roles": roles},
