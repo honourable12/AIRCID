@@ -1,370 +1,304 @@
 import os
-from typing import Optional
+from typing import Dict, List, Optional
 from groq import Groq
-from dotenv import load_dotenv
-import json
-import jsonschema
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_community.vectorstores import Chroma
-from app.db_utils import init_db
+from langchain.chains import RetrievalQA
+from langchain.prompts import PromptTemplate
+from langchain_core.messages import HumanMessage, AIMessage 
+from dotenv import load_dotenv
+from langchain.retrievers.multi_query import MultiQueryRetriever
+from langchain_groq import ChatGroq
 
-CHROMA_PERSIST_DIRECTORY = "chroma_db"
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+# For token counting approximation (simple character count for now)
+# For more accurate token counting, consider Groq's tokenizer if available,
+# or a general-purpose library like `transformers` tokenizers.
+# TOKEN_APPROX_MULTIPLIER = 4 # Roughly 4 chars per token for English text
+# LLAMA3_MAX_TOKENS = 8192 # Max context window for Llama 3 8B
+# We'll use character count directly for simplicity as a proxy for "length"
+CHAT_HISTORY_MAX_CHARS = 2000 # Max characters allowed for chat history before summarization
+                              # This is a heuristic; adjust based on LLM context window and typical query/answer sizes.
+                              # E.g., if total context is 8192 tokens, and RAG context takes 4000,
+                              # then remaining for history + question + answer is ~4000 tokens.
+                              # 2000 chars is roughly 500 tokens.
 
-init_db()
-load_dotenv()
+load_dotenv() # Load environment variables
 
 class LLMService:
-    def __init__(self):
-        self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        if not self.client.api_key:
-            raise ValueError("GROQ_API_KEY not found in environment variables. Please set it in your .env file.")
-        if not hasattr(self, '_embeddings'):
-            print(f"Initializing embedding model for RAG queries: {EMBEDDING_MODEL_NAME}")
-            self._embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+    _instance = None
 
-        # Initialize ChromaDB vector store
-        if not hasattr(self, '_vectorstore'):
-            print(f"Loading ChromaDB from: {CHROMA_PERSIST_DIRECTORY}")
-            try:
-                # This will load the existing DB. If it's empty, it won't have docs.
-                # It will NOT create an empty one if the directory doesn't exist,
-                # but it will initialize an empty client if the collection is empty.
-                self._vectorstore = Chroma(
-                    persist_directory=CHROMA_PERSIST_DIRECTORY,
-                    embedding_function=self._embeddings
-                )
-                print("ChromaDB loaded successfully.")
-                # You can add a check here if self.vectorstore.get()['ids'] is empty to suggest indexing.
-            except Exception as e:
-                print(f"Error loading ChromaDB: {e}. Ensure utils/kb_builder.py or /documents/upload has been run to populate it.")
-                self._vectorstore = None # Handle case where DB isn't ready
-                # We could also create an empty one here if it's truly not found:
-                # self._vectorstore = Chroma(embedding_function=self._embeddings, persist_directory=CHROMA_PERSIST_DIRECTORY)
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(LLMService, cls).__new__(cls)
+            cls._instance._initialize()
+        return cls._instance
 
-    @property
-    def embeddings(self):
-        return self._embeddings
+    def _initialize(self):
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
+        if not self.groq_api_key:
+            raise ValueError("GROQ_API_KEY environment variable not set.")
 
-    @property
-    def vectorstore(self):
-        return self._vectorstore
+        self.client = Groq(api_key=self.groq_api_key)
 
-    def augment_criteria(self, researcher_input: str) -> dict:
-        """
-        Sends the researcher's input to the LLM and returns refined suggestions.
-        """
-        # --- Prompt Engineering ---
-        prompt = f"""
-        You are an intelligent assistant specialized in refining research criteria.
-        Your task is to take a researcher's natural language input for criteria and
-        suggest clearer, more precise wording. Additionally, you should propose
-        potential structured rules that could be derived from the input.
+        # Initialize Embedding Model
+        self.embedding_model = SentenceTransformerEmbeddings(
+            model_name="all-MiniLM-L6-v2"
+        )
 
-        The output should be in a structured format that can be easily parsed.
-        Please provide:
-        1. A 'clearer_wording' field with the refined natural language.
-        2. A 'suggested_rules' field, which is a list of objects. Each object
-           should have a 'description' (clear rule description) and optionally
-           a 'structured_format' (e.g., a pseudo-code, JSON snippet, or formal
-           notation if applicable).
+        # Initialize ChromaDB Vector Store
+        self.vectorstore_path = "chroma_db"
+        self.vectorstore = Chroma(
+            persist_directory=self.vectorstore_path,
+            embedding_function=self.embedding_model,
+        )
+        self.langchain_llm = ChatGroq(
+            groq_api_key=self.groq_api_key,
+            model_name="meta-llama/llama-4-scout-17b-16e-instruct",
+            temperature=0.1
+        )
+        self.summary_prompt_template = PromptTemplate(
+            template="""You are a concise summarization expert. Summarize the following text
+            based on the context '{summary_context}'. Provide a summary in {length_preference} words or less.
+            Text: {text_content}
+            Summary:""",
+            input_variables=["text_content", "summary_context", "length_preference"]
+        )
 
-        Here is the researcher's input:
-        "{researcher_input}"
+        self.criteria_augment_prompt_template = PromptTemplate(
+            template="""You are an expert in refining research criteria.
+            Based on the researcher's input: "{researcher_input}", suggest clearer wording
+            and propose structured rule templates (e.g., using IF/THEN logic) to make the criteria
+            more precise for a clinical study.
+            Output your response as a JSON object with two keys:
+            'clearer_wording': 'your suggested clearer phrasing',
+            'suggested_rules': [{'description': 'rule description', 'structured_format': 'IF condition THEN action'}]
+            Example: {{"clearer_wording": "Patients diagnosed with Stage II breast cancer", "suggested_rules": [{{"description": "Diagnosis confirmed by biopsy", "structured_format": "IF diagnosis is 'Stage II breast cancer' AND biopsy='confirmed' THEN INCLUDE"}}]}}
+            Response:""",
+            input_variables=["researcher_input"]
+        )
 
-        Example Output Structure (important for parsing):
-        ```json
-        {{
-            "clearer_wording": "Refined and clearer statement of the criteria.",
-            "suggested_rules": [
-                {{
-                    "description": "Rule description 1.",
-                    "structured_format": "Optional structured format for rule 1 (e.g., 'IF condition THEN action')"
+        self.form_generate_prompt_template = PromptTemplate(
+            template="""You are an expert at generating JSON schema for data collection forms.
+            Based on the following study objectives or selected criteria: "{study_objectives}",
+            propose a preliminary JSON schema definition for a dynamic data collection form.
+            Suggest relevant data points, field types (e.g., "string", "number", "boolean", "array"),
+            and common form elements. Ensure the JSON is valid and follows JSON Schema Draft 7.
+            Example for collecting patient name and age:
+            {{
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "title": "Patient Demographics Form",
+                "type": "object",
+                "properties": {{
+                    "patientName": {{"type": "string", "description": "Full name of the patient"}},
+                    "patientAge": {{"type": "integer", "description": "Age of the patient in years", "minimum": 0}}
                 }},
-                {{
-                    "description": "Rule description 2.",
-                    "structured_format": null
-                }}
-            ]
-        }}
-        ```
-        Please provide only the JSON output, without any additional text or formatting outside the JSON block.
-        """
+                "required": ["patientName", "patientAge"]
+            }}
+            Response JSON Schema:""",
+            input_variables=["study_objectives"]
+        )
 
+        self.qna_prompt_template = PromptTemplate(
+            template="""You are a helpful and informative AI assistant specializing in medical and neurosurgical research.
+            Use the following retrieved context to answer the question.
+            If you don't know the answer based on the provided context, state that you don't know,
+            rather than trying to make up an answer.
+
+            Context:
+            {context}
+
+            Question: {question}
+
+            Answer:""",
+            input_variables=["context", "question"]
+        )
+
+        self.history_summarizer_prompt_template = PromptTemplate(
+            template="""You are a helpful AI assistant. Summarize the following conversation history between a user and an assistant.
+            Focus on key topics discussed, main questions asked, and critical information exchanged.
+            The summary should be concise and retain enough detail to provide context for a new user question.
+            Do not include the latest user question that needs to be answered.
+
+            Conversation History:
+            {chat_history}
+
+            Concise Summary of Conversation:""",
+            input_variables=["chat_history"]
+        )
+
+
+    def _call_llm(self, messages: List[Dict[str, str]], model: str = "llama3-8b-8192", max_tokens: int = 2000, json_mode: bool = False):
+        """
+        Generic method to call the LLM.
+        `messages` should be a list of dictionaries like [{"role": "user", "content": "..."}]
+        """
         try:
+            response_format = {"type": "json_object"} if json_mode else None
             chat_completion = self.client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    }
-                ],
-                model="meta-llama/llama-4-scout-17b-16e-instruct", 
-                response_format={"type": "json_object"}, # structured output
-                temperature=0.7, 
-                max_tokens=1024 #output length
+                messages=messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=0.0,
+                response_format=response_format
             )
-            llm_output_content = chat_completion.choices[0].message.content
-            parsed_output = json.loads(llm_output_content)
-            return {
-                "clearer_wording": parsed_output.get("clearer_wording", "No clearer wording provided."),
-                "suggested_rules": parsed_output.get("suggested_rules", []),
-                "llm_raw_output": llm_output_content # Included raw output for debugging
-            }
+            # Access content based on response_format
+            if json_mode:
+                return chat_completion.choices[0].message.content # Returns JSON string
+            else:
+                return chat_completion.choices[0].message.content
         except Exception as e:
-            print(f"Error communicating with LLM for criteria augmentation: {e}")
-            return {
-                "clearer_wording": f"Error: Could not process request. {e}",
-                "suggested_rules": [],
-                "llm_raw_output": f"Error: {e}"
-            }
+            print(f"Error calling LLM: {e}")
+            raise
 
-    def generate_json_schema(self, study_objectives: str, additional_context: Optional[str] = None) -> dict:
+    def _get_message_char_count(self, messages: List[Dict[str, str]]) -> int:
+        """Approximates the total character count of a list of messages."""
+        total_chars = 0
+        for msg in messages:
+            total_chars += len(msg.get("content", ""))
+        return total_chars
+
+    async def _summarize_long_chat_history(self, history: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """
-        Instructs the LLM to generate a valid JSON Schema for a data collection form.
+        Summarizes older parts of the chat history if it exceeds a character limit.
+        Keeps the last 2 messages (user + assistant) un-summarized for immediate context.
+        Returns the new, potentially summarized, chat history.
         """
-        # --- Prompt Engineering for JSON Schema Generation ---
-        prompt = f"""
-        You are an expert in data modeling and JSON Schema.
-        Your task is to generate a valid JSON Schema for a data collection form
-        based on the provided study objectives. The schema should define the
-        fields, their types, descriptions, and any relevant validation rules
-        (e.g., required fields, min/max lengths, patterns, enums).
+        if not history:
+            return []
+        num_messages_to_keep = 2
+        if len(history) <= num_messages_to_keep:
+            return history
+        # Split history into recent and older parts
+        recent_history = history[-num_messages_to_keep:]
+        older_history = history[:-num_messages_to_keep]
 
-        The output MUST be a complete and valid JSON Schema object.
-        Ensure it adheres to the JSON Schema Draft 7 standard (or a commonly
-        used draft like 2020-12).
+        older_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in older_history])
 
-        Study Objectives:
-        "{study_objectives}"
+        print(f"Summarizing chat history (length: {len(older_history_str)} chars)...")
 
-        {'Additional Context/Requirements: ' + additional_context if additional_context else ''}
-
-        Consider common data types like string, number, integer, boolean, array, object.
-        For example, if you need a date, use type "string" with "format": "date" or "date-time".
-        For multiple choice, use "enum" or an array of strings.
-
-        Example of a simple JSON Schema:
-        ```json
-        {{
-            "$schema": "[http://json-schema.org/draft-07/schema#](http://json-schema.org/draft-07/schema#)",
-            "title": "Patient Enrollment Form",
-            "description": "Schema for collecting patient enrollment data.",
-            "type": "object",
-            "properties": {{
-                "patientName": {{
-                    "type": "string",
-                    "description": "Full name of the patient.",
-                    "minLength": 3
-                }},
-                "age": {{
-                    "type": "integer",
-                    "description": "Age of the patient in years.",
-                    "minimum": 0,
-                    "maximum": 120
-                }},
-                "gender": {{
-                    "type": "string",
-                    "description": "Patient's gender.",
-                    "enum": ["Male", "Female", "Other", "Prefer not to say"]
-                }},
-                "diagnosisDate": {{
-                    "type": "string",
-                    "format": "date",
-                    "description": "Date of diagnosis."
-                }}
-            }},
-            "required": ["patientName", "age", "gender"]
-        }}
-        ```
-        Please provide only the JSON Schema output, without any additional text or formatting outside the JSON block.
-        """
+        summarization_prompt = self.history_summarizer_prompt_template.format(
+            chat_history=older_history_str
+        )
 
         try:
-            chat_completion = self.client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    }
-                ],
+            summary_message = self._call_llm(
+                messages=[{"role": "user", "content": summarization_prompt}],
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
-                response_format={"type": "json_object"}, # structured JSON output
-                temperature=0.7, 
-                max_tokens=2048 
+                max_tokens=500 
             )
-            llm_output_content = chat_completion.choices[0].message.content
-
-            # --- Validation Logic ---
-            try:
-                generated_schema = json.loads(llm_output_content)
-                # Validate the schema structure
-                if not isinstance(generated_schema, dict) or "$schema" not in generated_schema:
-                    raise ValueError("LLM output is not a valid JSON Schema structure.")
-
-                return {
-                    "json_schema": generated_schema,
-                    "llm_raw_output": llm_output_content
-                }
-            except (json.JSONDecodeError, ValueError, jsonschema.exceptions.ValidationError) as e:
-                print(f"LLM output is not valid JSON or JSON Schema: {e}")
-                return {
-                    "json_schema": {}, # Return empty schema on failure
-                    "llm_raw_output": llm_output_content, # included raw output for debugging
-                    "error": f"LLM generated invalid JSON or JSON Schema: {e}"
-                }
-
+            print("Chat history summarized.")
+            # Prepend the summary as an "assistant" message to represent the summarized context
+            # and then add the recent history back.
+            summarized_history = [{"role": "assistant", "content": f"Previous conversation summary: {summary_message}"}]
+            return summarized_history + recent_history
         except Exception as e:
-            print(f"Error communicating with LLM for JSON Schema generation: {e}")
-            return {
-                "json_schema": {}, # Return empty schema on failure
-                "llm_raw_output": f"Error: {e}",
-                "error": f"Internal LLM communication error: {e}"
-            }
-            
-    def summarize_text(self, text_content: str, summary_context: str, target_length: Optional[str] = None) -> dict:
+            print(f"Failed to summarize chat history: {e}. Returning original history.")
+            return history # Fallback to original history if summarization fails
+
+
+    # --- EXISTING LLM SERVICE METHODS (summarize_text, augment_criteria, generate_form) ---
+    def summarize_text(self, text_content: str, summary_context: str, length_preference: str = "200 words"):
+        prompt = self.summary_prompt_template.format(
+            text_content=text_content,
+            summary_context=summary_context,
+            length_preference=length_preference
+        )
+        messages = [{"role": "user", "content": prompt}]
+        return self._call_llm(messages)
+
+    def augment_criteria(self, researcher_input: str):
+        prompt = self.criteria_augment_prompt_template.format(researcher_input=researcher_input)
+        messages = [{"role": "user", "content": prompt}]
+        raw_json_str = self._call_llm(messages, json_mode=True)
+        return raw_json_str
+
+    def generate_form(self, study_objectives: str):
+        prompt = self.form_generate_prompt_template.format(study_objectives=study_objectives)
+        messages = [{"role": "user", "content": prompt}]
+        raw_json_schema = self._call_llm(messages, json_mode=True)
+        return raw_json_schema
+
+    # --- ENHANCED answer_question_with_rag FOR MULTI-HOP REASONING & HISTORY SUMMARIZATION ---
+    async def answer_question_with_rag(self, question: str, num_context_chunks: int = 5, chat_history: Optional[List[Dict[str, str]]] = None):
         """
-        Uses the LLM to generate a concise summary of a given text block,
-        tailoring the prompt based on the summary context.
+        Answers a question using Retrieval Augmented Generation (RAG) with multi-hop reasoning
+        and chat history summarization.
         """
-        # --- Prompt Engineering for Summarization ---
-        base_prompt = "Please summarize the following text concisely and accurately."
-        context_specific_instructions = ""
+        history_was_summarized = False
+        processed_chat_history_for_llm = []
 
-        if summary_context == "specialist_clinical":
-            context_specific_instructions = "Focus on critical clinical details, diagnoses, treatments, and patient status for a medical specialist. Use medical terminology where appropriate."
-        elif summary_context == "high_level_findings":
-            context_specific_instructions = "Provide a high-level overview of the main findings or conclusions. Omit minor details and focus on the most impactful information."
-        elif summary_context == "general":
-            context_specific_instructions = "Provide a general summary suitable for a broad audience."
-        # TODO: Add more context-specific instructions here as you define more SummaryContext types
+        if chat_history:
+            # Check if history needs summarization
+            total_history_chars = self._get_message_char_count(chat_history)
+            if total_history_chars > CHAT_HISTORY_MAX_CHARS:
+                print(f"Chat history (approx {total_history_chars} chars) exceeds limit {CHAT_HISTORY_MAX_CHARS}. Summarizing...")
+                processed_chat_history_for_llm = await self._summarize_long_chat_history(chat_history)
+                history_was_summarized = True
+            else:
+                processed_chat_history_for_llm = chat_history
+            print(f"Processed chat history length for LLM: {self._get_message_char_count(processed_chat_history_for_llm)} chars")
 
-        length_instruction = f" Ensure the summary is {target_length}." if target_length else ""
-
-        full_prompt = f"""
-        {base_prompt} {context_specific_instructions}{length_instruction}
-
-        Here is the text to summarize:
-        ---
-        {text_content}
-        ---
-
-        Please provide only the summary text.
-        """
-
-        try:
-            chat_completion = self.client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": full_prompt,
-                    }
-                ],
-                model="meta-llama/llama-4-scout-17b-16e-instruct",  
-                temperature=0.3, 
-                max_tokens=512 
-            )
-            summary_output = chat_completion.choices[0].message.content
-            return {
-                "summary": summary_output.strip(),
-                "llm_raw_output": summary_output
-            }
-        except Exception as e:
-            print(f"Error communicating with LLM for text summarization: {e}")
-            return {
-                "summary": f"Error: Could not generate summary. {e}",
-                "llm_raw_output": f"Error: {e}"
-            }
-
-
-    def answer_question_with_rag(self, question: str, num_context_chunks: int = 5) -> dict:
-        """
-        Implements the RAG pipeline: retrieves context from vector DB and uses LLM to answer.
-        """
         if not self.vectorstore:
             return {
                 "answer": "Knowledge base not initialized or empty. Please upload documents.",
                 "sources": [],
                 "retrieved_chunks": [],
                 "llm_raw_output": "N/A",
-                "error": "Knowledge base unavailable"
+                "error": "Knowledge base unavailable",
+                "history_summarized": history_was_summarized
             }
 
         try:
-            # 1. Retrieve relevant document chunks
-            print(f"Retrieving {num_context_chunks} relevant chunks for question: '{question}'")
-            # The documents returned by ChromaDB are LangChain Document objects,
-            # which have `page_content` (the text) and `metadata`.
-            retrieved_docs_with_scores = self.vectorstore.similarity_search_with_score(question, k=num_context_chunks)
-
-            context_texts = []
-            source_list = []
-            retrieved_chunks_content = []
-
-            for doc, score in retrieved_docs_with_scores:
-                context_texts.append(doc.page_content)
-                retrieved_chunks_content.append(doc.page_content) # Store raw chunk content for response
-
-                # Extract source information from metadata, which now includes 'db_id' and 'filename'
-                source_info = doc.metadata.get('source', 'Unknown Source')
-                # You can enrich this further if 'page' or other metadata were stored during indexing
-                # Example: source_path = doc.metadata.get('source_path', 'N/A')
-                # page_number = doc.metadata.get('page', 'N/A')
-                # source_list.append(f"{source_info} (Path: {source_path}, Page: {page_number})")
-                source_list.append(source_info) # Use the source field as indexed
-
-                print(f"  - Retrieved chunk (Score: {score:.4f}): {doc.page_content[:100]}... (Source: {source_info})")
-
-            context_string = "\n\n".join(context_texts)
-            unique_sources = list(set(source_list)) # Get unique sources
-
-            # 3. Prompt Engineering: Construct RAG prompt
-            rag_prompt = f"""
-            You are a helpful and knowledgeable assistant.
-            Use the following pieces of context to answer the user's question.
-            If you don't know the answer based on the provided context,
-            simply state that you cannot find the answer in the provided information.
-            Do NOT try to make up an answer.
-
-            Context:
-            ---
-            {context_string}
-            ---
-
-            Question: {question}
-
-            Answer:
-            """
-
-            # 4. Send the constructed prompt to the LLM
-            print("Sending RAG prompt to LLM...")
-            chat_completion = self.client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": rag_prompt,
-                    }
-                ],
-                model="llama3-8b-8192",  # Use a suitable Groq model
-                temperature=0.2, # Lower temperature for more factual, less creative answers
-                max_tokens=1024 # Adjust based on expected answer length
+            # 1. Multi-Query Generation for Enhanced Retrieval
+            retriever_from_llm = MultiQueryRetriever.from_llm(
+                retriever=self.vectorstore.as_retriever(search_kwargs={"k": num_context_chunks}),
+                llm=self.langchain_llm,
             )
-            llm_answer = chat_completion.choices[0].message.content.strip()
+
+            retrieved_docs = await retriever_from_llm.ainvoke(question)
+
+            context_text = "\n\n".join([doc.page_content for doc in retrieved_docs])
+            sources = sorted(list(set([
+                f"{doc.metadata.get('source', 'Unknown Source')}{' (Page ' + str(doc.metadata['page']) + ')' if 'page' in doc.metadata else ''}"
+                for doc in retrieved_docs
+            ])))
+            retrieved_chunks = [doc.page_content for doc in retrieved_docs]
+
+            # 2. Construct messages for the final LLM call
+            # Start with processed chat history
+            messages_for_llm = []
+            for msg in processed_chat_history_for_llm:
+                messages_for_llm.append({"role": msg['role'], "content": msg['content']})
+
+            # Add the RAG prompt with context and the current question
+            final_rag_prompt_content = self.qna_prompt_template.format(
+                context=context_text,
+                question=question
+            )
+            messages_for_llm.append({"role": "user", "content": final_rag_prompt_content})
+
+            print(f"Sending final RAG prompt to LLM (total messages: {len(messages_for_llm)}).")
+            # Use _call_llm for the final answer
+            answer = self._call_llm(
+                messages=messages_for_llm,
+                model=self.langchain_llm.model_name,
+                max_tokens=2000, # Max tokens for the answer
+            )
 
             return {
-                "answer": llm_answer,
-                "sources": unique_sources,
-                "retrieved_chunks": retrieved_chunks_content,
-                "llm_raw_output": llm_answer
+                "answer": answer,
+                "sources": sources,
+                "retrieved_chunks": retrieved_chunks,
+                "llm_raw_output": answer, # Raw output is the answer here
+                "history_summarized": history_was_summarized
             }
-
         except Exception as e:
-            print(f"Error during RAG pipeline execution: {e}")
+            print(f"Error in RAG process: {e}")
             return {
                 "answer": f"An error occurred while trying to answer your question: {e}",
                 "sources": [],
                 "retrieved_chunks": [],
                 "llm_raw_output": f"Error: {e}",
-                "error": str(e)
+                "error": str(e),
+                "history_summarized": history_was_summarized
             }
-            

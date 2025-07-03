@@ -5,6 +5,12 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain.docstore.document import Document as LangChainDocument
+from sqlalchemy.orm import Session
+from app.db_utils import SessionLocal, Document
+from app.llm_service import LLMService
+from typing import List
+from PIL import Image
+import pytesseract
 
 from app.db_utils import get_all_documents_for_indexing, Document as DBDocument
 
@@ -19,6 +25,54 @@ def get_embedding_model():
         print(f"Loading embedding model: {EMBEDDING_MODEL_NAME}")
         get_embedding_model.model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
     return get_embedding_model.model
+
+def load_documents_from_db(db : Session) -> List[LangchainDocument]:
+    db_documents = db.query(documents).all()
+    langchain_documents = []
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=50,
+        length_function=len,
+        is_separator_regex=False,
+    )
+    
+    for doc in db_documents:
+        content = doc.content 
+        metadata = {"source": f"DB_ID:{doc.id} - {doc.filename}", "file_type": doc.file_type}
+        
+    if doc.file_type and doc.file_tyoe_startswith('image/'):
+        # try:
+            #     # This assumes original image files are persistently available
+            #     # e.g., in a mounted volume or a specific directory.
+            #     # This is a simplification; a production app might store image paths
+            #     # or the binary blobs and regenerate on demand.
+            #     temp_image_path = os.path.join("temp_uploaded_files", doc.filename)
+            #     if os.path.exists(temp_image_path):
+            #         content = extract_text_from_image(temp_image_path)
+            #     else:
+            #         print(f"Warning: Image file not found for OCR: {temp_image_path}")
+            #         content = "" # Or a placeholder
+            # except Exception as e:
+            #     print(f"Error OCRing document {doc.filename} during KB rebuild: {e}")
+            #     content = ""
+            pass
+            if content: # Only process if there's content to chunk
+            # Split the document into chunks
+                chunks = text_splitter.split_text(content)
+            for i, chunk in enumerate(chunks):
+                chunk_metadata = {**metadata, "chunk_id": i + 1}
+                langchain_documents.append(
+                    LangChainDocumen(page_content=chunk, metadata=chunk_metadata)
+                )
+    return langchain_documents
+
+def extract_text_from_image(image_path: str) -> str:
+    try:
+        img = Image.open(image_path)
+        text = pytesseract.image_to_string(img)
+        return text
+    except Exception as e:
+        print(f"Error during OCR fir {image_path}: {e}")
 
 def chunk_documents(documents: list[LangChainDocument], chunk_size=1000, chunk_overlap=200):
     """
@@ -149,7 +203,7 @@ if __name__ == "__main__":
 
     # 2. To rebuild ChromaDB ONLY from documents ALREADY IN SQLite:
     #    Use this if you've added documents via the API and want to re-index everything.
+    print("Attempting to rebuild Chroma KB from SQLite...")
     rebuild_chroma_from_sqlite()
-
-    # If you run `python utils/kb_builder.py` without uncommenting either, it will just load model.
-    # You'll need to uncomment one of the main functions above to perform an action.
+    print("Chroma KB rebuild process completed.")
+    

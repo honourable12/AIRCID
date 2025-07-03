@@ -1,111 +1,157 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-import json
+from app.db_utils import get_db, Document
+from app.llm_service import LLMService
+from langchain.docstore.document import Document as LangchainDocument
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
-
-from app.db_utils import get_db, store_document_in_db, Document as DBDocument
-from utils.kb_builder import get_embedding_model, chunk_documents, index_documents_to_chroma 
-from langchain.docstore.document import Document as LangChainDocument 
+import shutil
+from typing import List
+from PIL import Image 
+import pytesseract 
 
 router = APIRouter()
+llm_service = LLMService()
+
+UPLOAD_DIR = "uploaded_files_temp"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Helper function for OCR 
+def perform_ocr_on_image(file_path: str) -> str:
+    try:
+        img = Image.open(file_path)
+        text = pytesseract.image_to_string(img)
+        return text
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"OCR processing failed for image: {e}"
+        )
 
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    """
-    Uploads a document (PDF or TXT), stores it in SQLite, and
-    immediately indexes it into the ChromaDB vector store.
-    """
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file uploaded.")
-
-    file_extension = os.path.splitext(file.filename)[1].lower()
-    if file_extension not in [".pdf", ".txt"]:
-        raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and TXT are allowed.")
+    file_location = os.path.join(UPLOAD_DIR, file.filename)
+    file_content = None
 
     try:
-        file_content = await file.read()
-        document_text = ""
-        metadata = {"filename": file.filename, "file_type": file_extension}
+        with open(file_location, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
-        if file_extension == ".pdf":
-            # For PDFs, load with PyPDFLoader to get page content and metadata
-            from langchain_community.document_loaders import PyPDFLoader
-            # Create a temporary file to save the uploaded PDF
-            temp_file_path = f"/tmp/{file.filename}"
-            with open(temp_file_path, "wb") as temp_file:
-                temp_file.write(file_content)
+        file_type = file.content_type
 
-            loader = PyPDFLoader(temp_file_path)
-            lc_docs = loader.load()
-            document_text = "\n\n".join([doc.page_content for doc in lc_docs])
-            # Add LangChain's extracted metadata if useful, e.g., page numbers
-            if lc_docs:
-                metadata['total_pages'] = len(lc_docs)
-                # You might want to merge specific metadata from lc_docs[0].metadata
-                # For now, keeping it simple.
+        if file_type == "application/pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(file_location)
+            file_content = ""
+            for page in reader.pages:
+                file_content += page.extract_text() or ""
+            if not file_content:
+                raise HTTPException(status_code=400, detail="Could not extract text from PDF. It might be a scanned PDF. Consider image upload for OCR.")
 
-            os.remove(temp_file_path) # Clean up temp file
+        elif file_type == "text/plain":
+            with open(file_location, "r", encoding="utf-8") as f:
+                file_content = f.read()
 
-        elif file_extension == ".txt":
-            document_text = file_content.decode('utf-8')
+        elif file_type.startswith("image/"):
+            file_content = perform_ocr_on_image(file_location)
+            if not file_content:
+                raise HTTPException(status_code=400, detail="Could not extract text from image using OCR.")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {file_type}. Only PDF, TXT, and images are supported.",
+            )
+
+        if not file_content.strip():
+            raise HTTPException(status_code=400, detail="Extracted content is empty. Document might be blank or corrupted.")
+
 
         # Store in SQLite database
-        print(f"Storing '{file.filename}' in SQLite database...")
-        db_doc = store_document_in_db(file.filename, document_text, metadata)
-        print(f"Document stored with ID: {db_doc.id}")
-
-        # Prepare document for ChromaDB indexing
-        # Create a LangChain Document from the SQLite-stored content
-        # Ensure metadata includes the SQLite DB ID and filename for source tracking
-        chroma_metadata = {
-            "source": f"DB_ID:{db_doc.id} - {db_doc.filename}",
-            "db_id": db_doc.id,
-            "filename": db_doc.filename,
-            **metadata # Include original file metadata
-        }
-        langchain_doc_for_indexing = LangChainDocument(
-            page_content=db_doc.content, # Use the content stored in DB
-            metadata=chroma_metadata
+        new_document = Document(
+            filename=file.filename,
+            file_type=file_type,
+            content=file_content,
+            filepath=file_location
         )
+        db.add(new_document)
+        db.commit()
+        db.refresh(new_document)
 
-        # Chunk and index the newly added document into ChromaDB
-        print(f"Chunking and indexing '{file.filename}' into ChromaDB...")
-        text_chunks = chunk_documents([langchain_doc_for_indexing])
-        
-        # Incremental addition to ChromaDB (better than full rebuild for single docs)
-        embeddings_model = get_embedding_model()
-        from langchain_community.vectorstores import Chroma
-        # Attempt to load existing DB. If it doesn't exist, this will create an empty one.
-        chroma_db = Chroma(persist_directory=os.getenv("CHROMA_PERSIST_DIRECTORY", "chroma_db"), embedding_function=embeddings_model)
-        chroma_db.add_documents(text_chunks)
-        chroma_db.persist()
-        print(f"Successfully added {len(text_chunks)} chunks from '{file.filename}' to ChromaDB.")
+        # Index in ChromaDB
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=500,
+            chunk_overlap=50,
+            length_function=len,
+            is_separator_regex=False,
+        )
+        chunks = text_splitter.split_text(file_content)
+
+        if not chunks:
+            raise HTTPException(status_code=500, detail="No chunks generated from document content.")
+
+        langchain_documents = []
+        for i, chunk in enumerate(chunks):
+            # Includes document ID and filename in metadata for traceability
+            metadata = {
+                "source": f"DB_ID:{new_document.id} - {new_document.filename}",
+                "file_type": new_document.file_type,
+                "chunk_id": i + 1,
+            }
+            langchain_documents.append(
+                LangchainDocument(page_content=chunk, metadata=metadata)
+            )
+
+        llm_service.vectorstore.add_documents(langchain_documents)
 
         return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={"message": "Document uploaded and indexed successfully", "document_id": db_doc.id}
+            status_code=200,
+            content={
+                "message": "Document uploaded and indexed successfully",
+                "document_id": new_document.id,
+                "filename": new_document.filename,
+                "indexed_chunks": len(langchain_documents)
+            },
         )
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
-        print(f"Error during document upload/indexing: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process document: {e}")
+        print(f"Error during document upload: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error during upload: {e}")
+    finally:
+        if os.path.exists(file_location):
+            os.remove(file_location)
 
 @router.get("/list")
 async def list_documents(db: Session = Depends(get_db)):
-    """
-    Lists all documents stored in the SQLite database.
-    """
-    documents = db.query(DBDocument).all()
+    documents = db.query(Document).all()
     return [
-        {
-            "id": doc.id,
-            "filename": doc.filename,
-            "upload_timestamp": doc.upload_timestamp.isoformat(),
-            "metadata": json.loads(doc.metadata_json)
-        }
+        {"id": doc.id, "filename": doc.filename, "file_type": doc.file_type, "uploaded_at": doc.uploaded_at}
         for doc in documents
     ]
+
+@router.delete("/{document_id}")
+async def delete_document(document_id: int, db: Session = Depends(get_db)):
+    db_document = db.query(Document).filter(Document.id == document_id).first()
+    if not db_document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    try:
+        llm_service.vectorstore._collection.delete(
+            where={"source": f"DB_ID:{db_document.id} - {db_document.filename}"}
+        )
+        db.delete(db_document)
+        db.commit()
+
+        return JSONResponse(
+            status_code=200,
+            content={"message": f"Document {document_id} deleted successfully from DB and ChromaDB."}
+        )
+    except Exception as e:
+        db.rollback()
+        print(f"Error deleting document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {e}")
+    
