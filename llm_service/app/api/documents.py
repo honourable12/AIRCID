@@ -30,7 +30,7 @@ def perform_ocr_on_image(file_path: str) -> str:
         )
 
 @router.post("/upload", summary="Upload a document for processing",
-            dependencies=[Depends(role_required(["admin"]))])
+            dependencies=[Depends(role_required(["admin", "researcher"]))])
 async def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -155,7 +155,7 @@ async def get_document(
         "uploaded_at": document.uploaded_at.isoformat()
     }
 
-@router.delete("/{document_id}")
+@router.delete("/{document_id}", dependencies=[Depends(role_required(["admin", "researcher"]))])
 async def delete_document(document_id: int, db: Session = Depends(get_db)):
     db_document = db.query(Document).filter(Document.id == document_id).first()
     if not db_document:
