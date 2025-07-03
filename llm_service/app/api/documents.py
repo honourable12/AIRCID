@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from app.db_utils import get_db, Document
 from app.llm_service import LLMService
+from app.security import role_required
 from langchain.docstore.document import Document as LangchainDocument
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
@@ -28,7 +29,8 @@ def perform_ocr_on_image(file_path: str) -> str:
             status_code=500, detail=f"OCR processing failed for image: {e}"
         )
 
-@router.post("/upload")
+@router.post("/upload", summary="Upload a document for processing",
+            dependencies=[Depends(role_required(["admin"]))])
 async def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -132,6 +134,26 @@ async def list_documents(db: Session = Depends(get_db)):
         {"id": doc.id, "filename": doc.filename, "file_type": doc.file_type, "uploaded_at": doc.uploaded_at}
         for doc in documents
     ]
+
+@router.get("/{document_id}", summary="Retrieve a document by ID",
+            response_model=dict,
+            dependencies=[Depends(role_required(["admin", "researcher"]))]) # NEW: Admin or researcher can view
+async def get_document(
+    document_id: int,
+    db: Session = Depends(get_db)
+):
+    
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    return {
+        "id": document.id,
+        "filename": document.filename,
+        "file_type": document.file_type,
+        "content": document.content,
+        "uploaded_at": document.uploaded_at.isoformat()
+    }
 
 @router.delete("/{document_id}")
 async def delete_document(document_id: int, db: Session = Depends(get_db)):

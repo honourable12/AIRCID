@@ -4,7 +4,7 @@ from app.llm_service import LLMService
 from typing import List, Dict, Any
 
 router = APIRouter()
-llm_service = LLMService() # This will initialize the LLMService and load ChromaDB
+llm_service = LLMService() 
 
 @router.post("/ask", response_model=QnAResponse)
 async def ask_qna(request: QnARequest):

@@ -1,27 +1,52 @@
-from fastapi import FastAPI
-from app.api import criteria
-from app.api import forms
-from app.api import text
-from app.api import qna
-from app.api import documents 
-from app.db_utils import init_db
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status
+from fastapi.responses import JSONResponse
+from typing import List
+import os
+from dotenv import load_dotenv
+
+from app.db_utils import init_db, get_db, Document
+from sqlalchemy.orm import Session
+from app.api import documents, qna, criteria, forms, text
+from app.security import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, User, role_required # NEW: Import security functions
+from datetime import timedelta
+
+load_dotenv()
+os.environ.setdefault("JWT_SECRET_KEY")
 
 app = FastAPI(
-    title="Intelligent LLM Applications",
-    description="A collection of LLM-powered API endpoints for criteria augmentation, form generation, text summarization, contextual Q&A, and document management.",
-    version="1.0.0"
+    title="LLM Microservice",
+    description="Microservice to assist clinical researchers with document processing, Q&A, and LLM-driven content generation and refinement.",
+    version="1.0.0",
 )
 
 @app.on_event("startup")
 async def startup_event():
     init_db()
 
+app.include_router(documents.router, prefix="/documents", tags=["Documents"])
+app.include_router(qna.router, prefix="/qna", tags=["Q&A"])
 app.include_router(criteria.router, prefix="/criteria", tags=["Criteria Augmentation"])
-app.include_router(forms.router, prefix="/forms", tags=["Smart Form Generation"])
+app.include_router(forms.router, prefix="/forms", tags=["Form Generation"])
 app.include_router(text.router, prefix="/text", tags=["Automated Report & Note Summarization"])
-app.include_router(qna.router, prefix="/qna", tags=["Contextual Q&A (RAG)"])
-app.include_router(documents.router, prefix="/documents", tags=["Document Management"])
+
+@app.post("/token", summary="Generate a test JWT token for a user role")
+async def login_for_access_token(
+    user_id: str = "testuser",
+    username: str = "Test User",
+    roles: List[str] = ["researcher"]
+):
+    """
+    Generates a JWT token for testing purposes.
+    Provide a user_id, username, and a list of roles to include in the token.
+    Example roles: `["admin"]`, `["researcher"]`, `["guest"]`.
+    """
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user_id, "username": username, "roles": roles},
+        expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to the Intelligent LLM Applications API! Visit /docs for API documentation."}
+    return {"message": "LLM Microservice is running!"}

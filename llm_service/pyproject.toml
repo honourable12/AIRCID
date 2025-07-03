@@ -22,6 +22,7 @@ dependencies = [
     "sentence-transformers>=5.0.0",
     "sqlalchemy>=2.0.41",
     "uvicorn>=0.34.3",
+    "pyjwt>=2.10.1",
 ]
 
 [tool.uv]

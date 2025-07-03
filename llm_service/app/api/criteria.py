@@ -1,3 +1,4 @@
+from typing import List
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -9,6 +10,7 @@ from app.models import (
     CriteriaRefinementRequest
 )
 from app.db_utils import get_db, AugmentedCriteriaVersion
+from app.security import role_required
 from sqlalchemy.orm import Session
 import json
 import hashlib
@@ -19,7 +21,8 @@ llm_service = LLMService()
 def generate_input_hash(input_string: str) -> str:
     return hashlib.sha256(input_string.encode('utf-8')).hexdigest()
 
-@router.post("/augment", response_model=CriteriaAugmentationResponse)
+@router.post("/augment", response_model=CriteriaAugmentationResponse, summary="Augment clinical trial criteria",
+            dependencies=[Depends(role_required(["researcher", "admin"]))])
 async def augment_criteria(
     request: CriteriaAugmentationRequest,
     db: Session = Depends(get_db)
@@ -48,8 +51,8 @@ async def augment_criteria(
             llm_output_json=llm_response_json_str,
             llm_model_used=llm_service.langchain_llm.model_name,
             version_number=next_version_number,
-            modified_by="LLM", # Set to LLM for initial generation
-            refinement_of_version_id=None # Not a refinement of a previous version
+            modified_by="LLM", 
+            refinement_of_version_id=None 
         )
         db.add(new_version)
         db.commit()
@@ -75,7 +78,8 @@ async def augment_criteria(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
-@router.post("/versions/{version_id}/refine", response_model=CriteriaAugmentationResponse)
+@router.post("/versions/{version_id}/refine", response_model=CriteriaAugmentationResponse, summary="Refine an existing criteria version",
+            dependencies=[Depends(role_required(["researcher", "admin"]))])
 async def refine_criteria_version(
     version_id: int,
     request: CriteriaRefinementRequest,
@@ -102,10 +106,10 @@ async def refine_criteria_version(
             original_input=original_input,
             original_input_hash=original_input_hash,
             llm_output_json=refined_output_json_str,
-            llm_model_used="Human Refined", # Indicate it's human modified
+            llm_model_used="researcher Refined",
             version_number=next_version_number,
-            modified_by="Human", # Set to Human for refinement
-            refinement_of_version_id=version_id # Link back to the base version
+            modified_by="researcher", 
+            refinement_of_version_id=version_id
         )
         db.add(new_refined_version)
         db.commit()
@@ -130,5 +134,82 @@ async def refine_criteria_version(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
-# TODO (Ensure GET endpoints like /versions/{version_id}, /history/by_input_hash/{input_hash}, /versions/latest
-# are updated to correctly return the 'modified_by' and 'refinement_of_version_id' fields from the database.)
+
+@router.get("/versions/{version_id}", response_model=CriteriaVersionDetails, summary="Get a specific criteria version by ID",
+            dependencies=[Depends(role_required(["researcher", "admin"]))])
+async def get_criteria_version_by_id(
+    version_id: int,
+    db: Session = Depends(get_db)
+):
+    version_record = db.query(AugmentedCriteriaVersion).filter(AugmentedCriteriaVersion.id == version_id).first()
+    if not version_record:
+        raise HTTPException(status_code=404, detail="Criteria version not found.")
+
+    llm_output_parsed = json.loads(version_record.llm_output_json)
+
+    return CriteriaVersionDetails(
+        version_id=version_record.id,
+        version_number=version_record.version_number,
+        original_input=version_record.original_input,
+        llm_output=llm_output_parsed,
+        llm_model_used=version_record.llm_model_used,
+        version_timestamp=version_record.version_timestamp,
+        modified_by=version_record.modified_by,
+        refinement_of_version_id=version_record.refinement_of_version_id
+    )
+
+@router.get("/history/by_input_hash/{input_hash}", response_model=List[CriteriaVersionDetails], summary="Get all criteria versions for a given input",
+            dependencies=[Depends(role_required(["researcher", "admin"]))]) 
+async def get_criteria_history_by_input_hash(
+    input_hash: str,
+    db: Session = Depends(get_db)
+):
+    versions = db.query(AugmentedCriteriaVersion)\
+                .filter(AugmentedCriteriaVersion.original_input_hash == input_hash)\
+                .order_by(AugmentedCriteriaVersion.version_number)\
+                .all()
+    if not versions:
+        raise HTTPException(status_code=404, detail="No criteria versions found for this input hash.")
+    
+    return [
+        CriteriaVersionDetails(
+            version_id=v.id,
+            version_number=v.version_number,
+            original_input=v.original_input,
+            llm_output=json.loads(v.llm_output_json),
+            llm_model_used=v.llm_model_used,
+            version_timestamp=v.version_timestamp,
+            modified_by=v.modified_by,
+            refinement_of_version_id=v.refinement_of_version_id
+        ) for v in versions
+    ]
+
+@router.get("/versions/latest", response_model=List[CriteriaVersionDetails], summary="Get the latest criteria version for each unique input",
+            dependencies=[Depends(role_required(["researcher", "admin"]))])
+async def get_latest_criteria_versions(
+    db: Session = Depends(get_db)
+):
+    subquery = db.query(
+        AugmentedCriteriaVersion.original_input_hash,
+        db.func.max(AugmentedCriteriaVersion.version_number).label("max_version")
+    ).group_by(AugmentedCriteriaVersion.original_input_hash).subquery()
+
+    latest_versions = db.query(AugmentedCriteriaVersion)\
+                        .join(
+                            subquery,
+                            (AugmentedCriteriaVersion.original_input_hash == subquery.c.original_input_hash) &
+                            (AugmentedCriteriaVersion.version_number == subquery.c.max_version)
+                        ).all()
+    
+    return [
+        CriteriaVersionDetails(
+            version_id=v.id,
+            version_number=v.version_number,
+            original_input=v.original_input,
+            llm_output=json.loads(v.llm_output_json),
+            llm_model_used=v.llm_model_used,
+            version_timestamp=v.version_timestamp,
+            modified_by=v.modified_by,
+            refinement_of_version_id=v.refinement_of_version_id
+        ) for v in latest_versions
+    ]
