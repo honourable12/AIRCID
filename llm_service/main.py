@@ -11,7 +11,7 @@ from app.security import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, User,
 from datetime import timedelta
 
 load_dotenv()
-os.environ.setdefault("JWT_SECRET_KEY")
+os.environ.setdefault("JWT_SECRET_KEY", "your_default_secret_key")  # Set a default secret key if not provided
 
 app = FastAPI(
     title="LLM Microservice",

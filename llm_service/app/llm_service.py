@@ -10,17 +10,7 @@ from dotenv import load_dotenv
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_groq import ChatGroq
 
-# For token counting approximation (simple character count for now)
-# For more accurate token counting, consider Groq's tokenizer if available,
-# or a general-purpose library like `transformers` tokenizers.
-# TOKEN_APPROX_MULTIPLIER = 4 # Roughly 4 chars per token for English text
-# LLAMA3_MAX_TOKENS = 8192 # Max context window for Llama 3 8B
-# We'll use character count directly for simplicity as a proxy for "length"
-CHAT_HISTORY_MAX_CHARS = 2000 # Max characters allowed for chat history before summarization
-                              # This is a heuristic; adjust based on LLM context window and typical query/answer sizes.
-                              # E.g., if total context is 8192 tokens, and RAG context takes 4000,
-                              # then remaining for history + question + answer is ~4000 tokens.
-                              # 2000 chars is roughly 500 tokens.
+CHAT_HISTORY_MAX_CHARS = 2000 
 
 load_dotenv() # Load environment variables
 

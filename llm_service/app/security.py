@@ -6,7 +6,7 @@ from fastapi import HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
-SECRET_KEY = os.environ.get("JWT_SECRET_KEY") 
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "secret_key")  
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 
 
