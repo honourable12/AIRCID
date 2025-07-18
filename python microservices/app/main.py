@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from typing import List, Optional
+from typing import List, Optional, Dict
 import time
 from datetime import datetime
 
@@ -91,29 +91,18 @@ async def match_patient(
         )
 
 
-@app.post("/match-multiple-patients", response_model=List[MatchResult])
+@app.post("/match-multiple-patients", response_model=List[Dict[str, str]])
 async def match_multiple_patients(
     patients: List[Patient],
     study_criteria: StudyCriteria
-) -> List[MatchResult]:
+) -> List[Dict[str, str]]:
     """
-    Match multiple patients against study criteria
-    
-    Args:
-        patients: List of patient data to evaluate
-        study_criteria: Study criteria to match against
-        
-    Returns:
-        List[MatchResult]: Matching results for all patients
+    Match multiple patients against study criteria using Pandas/NumPy for filtering.
+    Returns a list of dicts: {patient_id, reason}
     """
     try:
-        results = []
-        for patient in patients:
-            match_result = await matching_service.match_patient(patient, study_criteria)
-            results.append(match_result)
-        
+        results = matching_service.match_patients_with_pandas(patients, study_criteria)
         return results
-        
     except Exception as e:
         raise HTTPException(
             status_code=500,

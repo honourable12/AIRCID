@@ -87,7 +87,7 @@ class NLPService:
         cleaned_text = self._preprocess_text(text)
         
         # Extract information based on criteria
-        extracted_info = await self._extract_clinical_information(cleaned_text, criteria)
+        extracted_info = await self.extract_clinical_information([cleaned_text], criteria)
         
         # Calculate match score
         score = self._calculate_nlp_score(cleaned_text, criteria, extracted_info)

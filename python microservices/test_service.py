@@ -11,8 +11,10 @@ from app.models import (
     InclusionCriteria, ExclusionCriteria, CriteriaType
 )
 from app.services.matching_service import MatchingService
+import pytest
 
 
+@pytest.mark.asyncio
 async def test_basic_matching():
     """Test basic patient matching functionality"""
     print("Testing AI Case Matching Service...")
@@ -26,14 +28,26 @@ async def test_basic_matching():
         first_name="John",
         last_name="Doe",
         date_of_birth=date(1980, 5, 15),
-        gender="Male"
+        gender="Male",
+        ethnicity=None,
+        race=None,
+        contact_info=None
     )
     
     patient = Patient(
         demographics=demographics,
+        vitals=None,
+        labs=None,
+        imaging=None,
         diagnoses=["Brain tumor", "Glioblastoma"],
         medications=["Temozolomide", "Dexamethasone"],
-        clinical_notes=["Patient presents with severe headache and confusion"]
+        procedures=None,
+        clinical_notes=["Patient presents with severe headache and confusion"],
+        admission_date=None,
+        discharge_date=None,
+        emergency_contact=None,
+        insurance_info=None,
+        additional_data=None
     )
     
     # Create sample study criteria
@@ -44,7 +58,11 @@ async def test_basic_matching():
             field_name="diagnoses",
             operator="contains",
             value="tumor",
-            description="Patient must have brain tumor diagnosis"
+            description="Patient must have brain tumor diagnosis",
+            is_required=True,
+            weight=1.0,
+            nlp_keywords=None,
+            custom_logic=None
         ),
         InclusionCriteria(
             criteria_id="INC002",
@@ -52,7 +70,11 @@ async def test_basic_matching():
             field_name="age",
             operator=">=",
             value=18,
-            description="Patient must be 18 or older"
+            description="Patient must be 18 or older",
+            is_required=True,
+            weight=1.0,
+            nlp_keywords=None,
+            custom_logic=None
         )
     ]
     
@@ -63,7 +85,10 @@ async def test_basic_matching():
             field_name="medications",
             operator="contains",
             value="warfarin",
-            description="Patients on warfarin are excluded"
+            description="Patients on warfarin are excluded",
+            is_required=True,
+            nlp_keywords=None,
+            custom_logic=None
         )
     ]
     
@@ -73,7 +98,13 @@ async def test_basic_matching():
         study_description="Study for patients with brain tumors",
         inclusion_criteria=inclusion_criteria,
         exclusion_criteria=exclusion_criteria,
-        minimum_match_score=0.7
+        minimum_match_score=0.7,
+        priority_score=1.0,
+        is_active=True,
+        created_at=None,
+        updated_at=None,
+        created_by=None,
+        additional_metadata=None
     )
     
     # Test patient matching
@@ -111,6 +142,7 @@ async def test_basic_matching():
     print("\nTest completed successfully!")
 
 
+@pytest.mark.asyncio
 async def test_exclusion_case():
     """Test patient exclusion scenario"""
     print("\nTesting exclusion case...")
@@ -123,13 +155,26 @@ async def test_exclusion_case():
         first_name="Jane",
         last_name="Smith",
         date_of_birth=date(2010, 3, 10),  # 13 years old
-        gender="Female"
+        gender="Female",
+        ethnicity=None,
+        race=None,
+        contact_info=None
     )
     
     young_patient = Patient(
         demographics=demographics,
+        vitals=None,
+        labs=None,
+        imaging=None,
         diagnoses=["Brain tumor"],
-        medications=["Temozolomide"]
+        medications=["Temozolomide"],
+        procedures=None,
+        clinical_notes=None,
+        admission_date=None,
+        discharge_date=None,
+        emergency_contact=None,
+        insurance_info=None,
+        additional_data=None
     )
     
     # Same study criteria as before
@@ -140,7 +185,11 @@ async def test_exclusion_case():
             field_name="diagnoses",
             operator="contains",
             value="tumor",
-            description="Patient must have brain tumor diagnosis"
+            description="Patient must have brain tumor diagnosis",
+            is_required=True,
+            weight=1.0,
+            nlp_keywords=None,
+            custom_logic=None
         ),
         InclusionCriteria(
             criteria_id="INC002",
@@ -148,15 +197,27 @@ async def test_exclusion_case():
             field_name="age",
             operator=">=",
             value=18,
-            description="Patient must be 18 or older"
+            description="Patient must be 18 or older",
+            is_required=True,
+            weight=1.0,
+            nlp_keywords=None,
+            custom_logic=None
         )
     ]
     
     study_criteria = StudyCriteria(
         study_id="ST001",
         study_name="Brain Tumor Study",
+        study_description=None,
         inclusion_criteria=inclusion_criteria,
-        minimum_match_score=0.7
+        exclusion_criteria=None,
+        minimum_match_score=0.7,
+        priority_score=1.0,
+        is_active=True,
+        created_at=None,
+        updated_at=None,
+        created_by=None,
+        additional_metadata=None
     )
     
     result = await matching_service.match_patient(young_patient, study_criteria)

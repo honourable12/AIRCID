@@ -2,6 +2,8 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, date
 import math
 from loguru import logger
+import pandas as pd
+import numpy as np
 
 from app.models import Patient, StudyCriteria, MatchResult, MatchConfidence, MatchReason
 from app.services.nlp_service import NLPService
@@ -37,7 +39,13 @@ class MatchingService:
             patient, study_criteria.inclusion_criteria
         )
         match_reasons.extend(inclusion_reasons)
-        
+
+        # Check for any required inclusion criteria not matched
+        required_not_matched = any(
+            getattr(study_criteria.inclusion_criteria[idx], 'is_required', True) and not reason.matched
+            for idx, reason in enumerate(inclusion_reasons)
+        )
+
         # Process exclusion criteria
         exclusion_score, exclusion_reasons = await self._evaluate_exclusion_criteria(
             patient, study_criteria.exclusion_criteria or []
@@ -48,12 +56,15 @@ class MatchingService:
         overall_score = self._calculate_overall_score(inclusion_score, exclusion_score)
         
         # Determine eligibility
-        is_eligible = self._determine_eligibility(
-            overall_score, 
-            inclusion_score, 
-            exclusion_score, 
-            study_criteria.minimum_match_score
-        )
+        if required_not_matched:
+            is_eligible = False
+        else:
+            is_eligible = self._determine_eligibility(
+                overall_score, 
+                inclusion_score, 
+                exclusion_score, 
+                study_criteria.minimum_match_score
+            )
         
         # Determine confidence level
         confidence = self._determine_confidence(overall_score, inclusion_score, exclusion_score)
@@ -88,7 +99,9 @@ class MatchingService:
             primary_reason=primary_reason,
             recommendations=recommendations,
             requires_manual_review=requires_manual_review,
-            matched_at=datetime.now()
+            matched_at=datetime.now(),
+            processing_time_ms=None,
+            additional_metadata=None
         )
         
         logger.info(f"Patient matching completed for {patient.demographics.patient_id}. "
@@ -175,7 +188,7 @@ class MatchingService:
                 matched=matched,
                 score=score,
                 details=details,
-                evidence=evidence
+                evidence=evidence if evidence is not None else {}
             )
             
             return score, reason
@@ -187,10 +200,11 @@ class MatchingService:
                 criteria_description=criteria.description,
                 matched=False,
                 score=0.0,
-                details=f"Error evaluating criteria: {str(e)}"
+                details=f"Error evaluating criteria: {str(e)}",
+                evidence={}
             )
             return 0.0, reason
-    
+
     async def _evaluate_age_criteria(self, patient: Patient, criteria: Any) -> tuple[float, bool, str, Dict]:
         """Evaluate age-based criteria"""
         if not patient.demographics.date_of_birth:
@@ -595,7 +609,7 @@ class MatchingService:
             recommendations.append("Manual review recommended for borderline criteria matches")
         
         # Check for missing data
-        missing_data_reasons = [r for r in match_reasons if "not available" in r.details.lower()]
+        missing_data_reasons = [r for r in match_reasons if r.details and "not available" in r.details.lower()]
         if missing_data_reasons:
             recommendations.append("Consider obtaining missing clinical data for more accurate assessment")
         
@@ -654,3 +668,134 @@ class MatchingService:
             validation_result["warnings"].append("Minimum match score should be between 0 and 1")
         
         return validation_result 
+
+    def _patients_to_dataframe(self, patients: List[Patient], criteria: StudyCriteria) -> pd.DataFrame:
+        """
+        Convert a list of Patient objects to a DataFrame with relevant fields for matching.
+        """
+        rows = []
+        for p in patients:
+            row = {
+                "patient_id": p.demographics.patient_id,
+                "age": self._calculate_age(p.demographics.date_of_birth),
+                "gender": p.demographics.gender,
+            }
+            # Extract lab values as columns
+            if p.labs:
+                for lab in p.labs:
+                    if lab.test_name and lab.test_value is not None:
+                        row[f"lab_{lab.test_name.lower()}"] = lab.test_value
+            # Extract vitals as columns (use most recent)
+            if p.vitals:
+                latest_vitals = max(p.vitals, key=lambda x: x.recorded_at or datetime.min)
+                for field in ["temperature", "heart_rate", "blood_pressure_systolic", "blood_pressure_diastolic", "respiratory_rate", "oxygen_saturation", "height", "weight", "bmi"]:
+                    row[f"vital_{field}"] = getattr(latest_vitals, field, None)
+            # Diagnoses, medications, procedures as sets for fast lookup
+            row["diagnoses"] = set([d.lower() for d in p.diagnoses]) if p.diagnoses else set()
+            row["medications"] = set([m.lower() for m in p.medications]) if p.medications else set()
+            row["procedures"] = set([proc.lower() for proc in p.procedures]) if p.procedures else set()
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def _calculate_age(self, dob):
+        if not dob:
+            return np.nan
+        today = date.today()
+        age = today.year - dob.year
+        if today.month < dob.month or (today.month == dob.month and today.day < dob.day):
+            age -= 1
+        return age
+
+    def _build_inclusion_mask(self, df: pd.DataFrame, inclusion_criteria: List[Any]) -> pd.Series:
+        mask = pd.Series([True] * len(df))
+        for crit in inclusion_criteria:
+            if crit.criteria_type.value == "age_range":
+                if crit.operator == ">=":
+                    mask &= df["age"] >= crit.value
+                elif crit.operator == "<":
+                    mask &= df["age"] < crit.value
+                elif crit.operator == ">":
+                    mask &= df["age"] > crit.value
+                elif crit.operator == "<=":
+                    mask &= df["age"] <= crit.value
+                elif crit.operator == "between" and isinstance(crit.value, list) and len(crit.value) == 2:
+                    mask &= (df["age"] >= crit.value[0]) & (df["age"] <= crit.value[1])
+            elif crit.criteria_type.value == "gender":
+                if crit.operator == "==":
+                    mask &= df["gender"].str.lower() == crit.value.lower()
+                elif crit.operator == "in" and isinstance(crit.value, list):
+                    mask &= df["gender"].str.lower().isin([v.lower() for v in crit.value])
+            elif crit.criteria_type.value == "lab_value":
+                col = f"lab_{crit.field_name.lower()}"
+                if col in df:
+                    if crit.operator == ">=":
+                        mask &= df[col] >= crit.value
+                    elif crit.operator == "<":
+                        mask &= df[col] < crit.value
+                    elif crit.operator == ">":
+                        mask &= df[col] > crit.value
+                    elif crit.operator == "<=":
+                        mask &= df[col] <= crit.value
+                    elif crit.operator == "==":
+                        mask &= df[col] == crit.value
+                    elif crit.operator == "between" and isinstance(crit.value, list) and len(crit.value) == 2:
+                        mask &= (df[col] >= crit.value[0]) & (df[col] <= crit.value[1])
+            elif crit.criteria_type.value == "diagnosis":
+                # Check if any diagnosis matches (case-insensitive)
+                mask &= df["diagnoses"].apply(lambda diags: any(
+                    (crit.value.lower() in d) if crit.operator == "contains" else (d == crit.value.lower())
+                    for d in diags
+                ) if isinstance(diags, set) else False)
+            elif crit.criteria_type.value == "medication":
+                mask &= df["medications"].apply(lambda meds: any(
+                    (crit.value.lower() in m) if crit.operator == "contains" else (m == crit.value.lower())
+                    for m in meds
+                ) if isinstance(meds, set) else False)
+            elif crit.criteria_type.value == "procedure":
+                mask &= df["procedures"].apply(lambda procs: any(
+                    (crit.value.lower() in p) if crit.operator == "contains" else (p == crit.value.lower())
+                    for p in procs
+                ) if isinstance(procs, set) else False)
+            # Add more criteria types as needed
+        return mask
+
+    def _build_exclusion_mask(self, df: pd.DataFrame, exclusion_criteria: List[Any]) -> pd.Series:
+        if not exclusion_criteria:
+            return pd.Series([False] * len(df))
+        mask = pd.Series([False] * len(df))
+        for crit in exclusion_criteria:
+            if crit.criteria_type.value == "age_range":
+                if crit.operator == "<":
+                    mask |= df["age"] < crit.value
+                elif crit.operator == ">=":
+                    mask |= df["age"] >= crit.value
+                elif crit.operator == "between" and isinstance(crit.value, list) and len(crit.value) == 2:
+                    mask |= (df["age"] >= crit.value[0]) & (df["age"] <= crit.value[1])
+            elif crit.criteria_type.value == "diagnosis":
+                mask |= df["diagnoses"].apply(lambda diags: any(
+                    (crit.value.lower() in d) if crit.operator == "contains" else (d == crit.value.lower())
+                    for d in diags
+                ) if isinstance(diags, set) else False)
+            # Add more exclusion logic as needed
+        return mask
+
+    def match_patients_with_pandas(self, patients: List[Patient], study_criteria: StudyCriteria) -> List[Dict[str, Any]]:
+        """
+        Batch match patients using Pandas/NumPy for rule-based filtering.
+        Returns a list of dicts: {patient_id, reason}
+        """
+        df = self._patients_to_dataframe(patients, study_criteria)
+        inclusion_mask = self._build_inclusion_mask(df, study_criteria.inclusion_criteria)
+        exclusion_mask = self._build_exclusion_mask(df, study_criteria.exclusion_criteria or [])
+        eligible_mask = inclusion_mask & ~exclusion_mask
+        matched_patients = df[eligible_mask]
+        results = []
+        for idx, row in matched_patients.iterrows():
+            reasons = []
+            for crit in study_criteria.inclusion_criteria:
+                reasons.append(f"Matched rule: {crit.description}")
+            results.append({
+                "patient_id": row["patient_id"],
+                "reason": "; ".join(reasons)
+            })
+        return results 
