@@ -8,5 +8,7 @@ llm_service/*.pyd
 llm_service/.pytest_cache/
 llm_service/chroma_db/
 llm_service/llm_service.egg-info/
-llm_service/document.db
+llm_service/documents.db
+llm_service/doc.txt
+
 
