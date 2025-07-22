@@ -75,8 +75,7 @@ async def upload_document(
         new_document = Document(
             filename=file.filename,
             file_type=file_type,
-            content=file_content,
-            filepath=file_location
+            content=file_content
         )
         db.add(new_document)
         db.commit()
