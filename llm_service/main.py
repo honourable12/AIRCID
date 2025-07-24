@@ -3,6 +3,8 @@ from fastapi.responses import JSONResponse
 from typing import List
 import os
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from app.db_utils import init_db, get_db, Document
 from sqlalchemy.orm import Session
@@ -19,6 +21,14 @@ app = FastAPI(
     version="1.0.0",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or specify your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.on_event("startup")
 async def startup_event():
     init_db()
@@ -29,15 +39,16 @@ app.include_router(criteria.router, prefix="/criteria", tags=["Criteria Augmenta
 app.include_router(forms.router, prefix="/forms", tags=["Form Generation"])
 app.include_router(text.router, prefix="/text", tags=["Automated Report & Note Summarization"])
 
-@app.post("/token", summary="Generate a test JWT token for a user role")
-async def login_for_access_token(
-    user_id: str = "testuser",
-    username: str = "Test User",
+class TokenRequest(BaseModel):
+    user_id: str = "testuser"
+    username: str = "Test User"
     roles: List[str] = ["researcher"]
-):
+
+@app.post("/token", summary="Generate a test JWT token for a user role")
+async def login_for_access_token(body: TokenRequest):
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user_id, "username": username, "roles": roles},
+        data={"sub": body.user_id, "username": body.username, "roles": body.roles},
         expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
