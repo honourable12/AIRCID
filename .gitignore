@@ -11,4 +11,17 @@ llm_service/llm_service.egg-info/
 llm_service/documents.db
 llm_service/doc.txt
 
+core_backend/.venv/
+core_backend/.env
+core_backend/__pycache__/
+core_backend/*.pyc
+core_backend/*.pyo
+core_backend/*.pyd
+core_backend/.pytest_cache/
+core_backend/chroma_db/
+core_backend/core_backend.egg-info/
+core_backend/seed.py
+
+
+
 

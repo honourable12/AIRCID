@@ -1,0 +1,31 @@
+# app/main.py
+from fastapi import Depends, FastAPI
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import create_db_and_tables, get_async_session
+import app.models
+
+from app.api.v1.endpoints import auth, users # Import the new users router
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Creating database tables...")
+    await create_db_and_tables()
+    print("Database tables created (or already exist).")
+    yield
+
+app = FastAPI(
+    title="Central Backend Service",
+    description="The platform's primary orchestration hub and central nervous system, built with Python FastAPI.",
+    version="0.1.0",
+    lifespan=lifespan
+)
+
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
+app.include_router(users.router, prefix="/api/v1/users", tags=["Users"]) # Include the users router
+
+
+@app.get("/")
+async def read_root(session: AsyncSession = Depends(get_async_session)):
+    return {"message": "Welcome to the Central Backend Service API! Database session active."}
