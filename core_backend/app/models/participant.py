@@ -1,50 +1,50 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text
+# app/models/participant.py
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel
+from typing import Optional
 from datetime import datetime
+
+# Import the Pydantic UserRead model
+from app.models.user import UserRead
 
 # SQLAlchemy ORM Model
 class Participant(Base):
     __tablename__ = "participants"
 
     id = Column(Integer, primary_key=True, index=True)
-    study_id = Column(Integer, ForeignKey("studies.id"), nullable=False) # Link to the study
-    external_id = Column(String, unique=True, index=True, nullable=True) # Optional external identifier for anonymity/linking
-    status = Column(String, default="enrolled") # e.g., "enrolled", "active", "completed", "withdrawn"
-    enrollment_date = Column(DateTime(timezone=True), server_default=func.now())
-    notes = Column(Text, nullable=True) # Any internal notes about the participant
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True) # Optional if participants can be anonymous
+    # Add study_id if participants are linked to studies
+    # study_id = Column(Integer, ForeignKey("studies.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Relationships
-    study = relationship("Study", back_populates="participants")
+    # Establish relationships
+    user = relationship("User", back_populates="participants") # Assuming User model has a 'participants' relationship
     responses = relationship("Response", back_populates="participant", cascade="all, delete-orphan")
-
+    # study = relationship("Study", back_populates="participants") # If linking to studies
 
 # Pydantic Schemas
 class ParticipantBase(BaseModel):
-    study_id: int = Field(..., example=1, description="The ID of the study this participant belongs to.")
-    external_id: Optional[str] = Field(None, example="PID-001", description="An optional external ID for the participant.")
-    status: str = Field("enrolled", example="enrolled", description="Current status of the participant (e.g., enrolled, active).")
-    notes: Optional[str] = Field(None, example="Participant contacted via email on 2023-01-15.")
+    user_id: Optional[int] = None # Make it optional for anonymous participants
 
 class ParticipantCreate(ParticipantBase):
     pass
 
 class ParticipantUpdate(ParticipantBase):
-    study_id: Optional[int] = None
-    external_id: Optional[str] = None
-    status: Optional[str] = None
-    notes: Optional[str] = None
+    pass
 
 class ParticipantRead(ParticipantBase):
     id: int
-    enrollment_date: datetime
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # Ensure 'user' field is typed with the Pydantic UserRead model
+    user: Optional[UserRead] = None # This must be UserRead, not User (ORM)
 
     class Config:
         from_attributes = True
+
+# Rebuild the model to resolve any forward references (e.g., if UserRead was defined later)
+ParticipantRead.model_rebuild()

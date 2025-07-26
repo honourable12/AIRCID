@@ -1,53 +1,56 @@
-from sqlalchemy import Column, Integer, Text, ForeignKey, DateTime, String
+# app/models/response.py
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
-from pydantic import BaseModel, Field, Json
-from typing import Optional, Any
+from pydantic import BaseModel
+from typing import Optional
 from datetime import datetime
-import json
+
+# Import Pydantic Read models for relationships
+from app.models.question import QuestionRead
+from app.models.participant import ParticipantRead
 
 # SQLAlchemy ORM Model
 class Response(Base):
     __tablename__ = "responses"
 
     id = Column(Integer, primary_key=True, index=True)
-    participant_id = Column(Integer, ForeignKey("participants.id"), nullable=False)
-    form_id = Column(Integer, ForeignKey("forms.id"), nullable=False)
     question_id = Column(Integer, ForeignKey("questions.id"), nullable=False)
-    answer_text = Column(Text, nullable=True) 
-    answer_json = Column(Text, nullable=True)
-
-    submitted_at = Column(DateTime(timezone=True), server_default=func.now())
+    participant_id = Column(Integer, ForeignKey("participants.id"), nullable=False)
+    response_text = Column(Text, nullable=True) # For open-ended answers
+    response_value = Column(Integer, nullable=True) # For numerical/rating answers
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Relationships
+    # Establish relationships
+    question = relationship("Question", back_populates="responses")
     participant = relationship("Participant", back_populates="responses")
-    form = relationship("Form", back_populates="responses_to_form")
-    question = relationship("Question", back_populates="responses_to_question")
-
 
 # Pydantic Schemas
 class ResponseBase(BaseModel):
-    participant_id: int = Field(..., example=1, description="The ID of the participant providing the response.")
-    form_id: int = Field(..., example=1, description="The ID of the form this response belongs to.")
-    question_id: int = Field(..., example=1, description="The ID of the question this response is for.")
-    answer_text: Optional[str] = Field(None, example="25", description="The participant's answer as a string.")
-    answer_data: Optional[Json[Any]] = Field(None, example='["Option A", "Option C"]', description="Complex answer data as JSON.")
+    question_id: int
+    participant_id: int
+    response_text: Optional[str] = None
+    response_value: Optional[int] = None
 
 class ResponseCreate(ResponseBase):
     pass
 
 class ResponseUpdate(ResponseBase):
-    answer_text: Optional[str] = None
-    answer_data: Optional[Json[Any]] = None
+    response_text: Optional[str] = None
+    response_value: Optional[int] = None
 
 class ResponseRead(ResponseBase):
     id: int
-    submitted_at: datetime
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # Ensure relationships are typed with their Pydantic Read models
+    question: Optional[QuestionRead] = None # This must be QuestionRead, not Question (ORM)
+    participant: Optional[ParticipantRead] = None # This must be ParticipantRead, not Participant (ORM)
 
     class Config:
         from_attributes = True
+
+# Rebuild the model to resolve any forward references
+ResponseRead.model_rebuild()

@@ -6,6 +6,7 @@ from sqlalchemy.orm import selectinload
 from typing import List, Optional
 
 from app.core.database import get_async_session
+# Ensure these are correctly imported for use with Depends()
 from app.api.dependencies.auth import get_current_user, get_researcher_or_admin_user, get_admin_user
 from app.models.question import Question, QuestionCreate, QuestionRead, QuestionUpdate
 from app.models.form import Form # Needed to check form/study ownership for authorization
@@ -17,7 +18,8 @@ router = APIRouter()
 async def create_question(
     question_create: QuestionCreate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = get_researcher_or_admin_user # Only researchers/admins can create questions
+    # FIX: Use Depends() for dependency injection
+    current_user: User = Depends(get_researcher_or_admin_user) # Only researchers/admins can create questions
 ):
     """
     Create a new question associated with a specific form.
@@ -46,7 +48,8 @@ async def create_question(
 @router.get("/", response_model=List[QuestionRead], summary="Get all questions (Admin) or questions for forms researcher has access to")
 async def read_questions(
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = get_researcher_or_admin_user,
+    # FIX: Use Depends() for dependency injection
+    current_user: User = Depends(get_researcher_or_admin_user),
     form_id: Optional[int] = None # Optional filter by form_id
 ):
     """
@@ -87,7 +90,8 @@ async def read_questions(
 async def read_question(
     question_id: int,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = get_researcher_or_admin_user
+    # FIX: Use Depends() for dependency injection
+    current_user: User = Depends(get_researcher_or_admin_user)
 ):
     """
     Retrieve a single question by its ID.
@@ -113,7 +117,8 @@ async def update_question(
     question_id: int,
     question_update: QuestionUpdate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = get_researcher_or_admin_user
+    # FIX: Use Depends() for dependency injection
+    current_user: User = Depends(get_researcher_or_admin_user)
 ):
     """
     Update an existing question by its ID.
@@ -145,7 +150,8 @@ async def update_question(
 async def delete_question(
     question_id: int,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = get_admin_user # Only administrators can delete questions
+    # FIX: Use Depends() for dependency injection
+    current_user: User = Depends(get_admin_user) # Only administrators can delete questions
 ):
     """
     Delete a question by its ID. This action is restricted to 'administrator' roles.

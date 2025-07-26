@@ -1,14 +1,21 @@
-# app/models/role.py
+from enum import Enum
 from typing import Optional, List
 from datetime import datetime
 from sqlalchemy import Column, Integer, String
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from pydantic import BaseModel
 
-from app.core.database import Base # Import our SQLAlchemy Base
-# from app.models.user import User # <--- REMOVE OR COMMENT OUT THIS LINE
+from app.core.database import Base 
+# from app.models.user import User
 
 # SQLAlchemy ORM Model
+
+class RoleName(str, Enum):
+    administrator = "administrator"
+    researcher = "researcher"
+    participant = "participant"
+    guest = "guest"
+    
 class Role(Base):
     __tablename__ = "roles"
 
