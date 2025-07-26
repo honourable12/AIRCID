@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import create_db_and_tables, get_async_session
 import app.models
 
-from app.api.v1.endpoints import auth, users # Import the new users router
+from app.api.v1.endpoints import auth, users, studies, forms, questions 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -23,7 +23,10 @@ app = FastAPI(
 )
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
-app.include_router(users.router, prefix="/api/v1/users", tags=["Users"]) # Include the users router
+app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
+app.include_router(studies.router, prefix="/api/v1/studies", tags=["Studies"])
+app.include_router(forms.router, prefix="/api/v1/forms", tags=["Forms"])
+app.include_router(questions.router, prefix="/api/v1/questions", tags=["Questions"])
 
 
 @app.get("/")
