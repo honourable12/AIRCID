@@ -35,6 +35,7 @@ class Question(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     form = relationship("Form", back_populates="questions")
+    responses_to_question = relationship("Response", back_populates="question", cascade="all, delete-orphan")
 
 
 # Pydantic Schemas

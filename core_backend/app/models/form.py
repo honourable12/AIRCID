@@ -24,6 +24,7 @@ class Form(Base):
 
     # Relationship to Questions
     questions = relationship("Question", back_populates="form", cascade="all, delete-orphan")
+    responses_to_form = relationship("Response", back_populates="form", cascade="all, delete-orphan")
 
     # Optional: Link to the user who created it (requires user.id)
     # creator_id = Column(Integer, ForeignKey("users.id"), nullable=True)

@@ -33,6 +33,7 @@ class Study(Base):
 
     # Add this line for the relationship to Forms
     forms = relationship("Form", back_populates="study", cascade="all, delete-orphan")
+    participants = relationship("Participant", back_populates="study", cascade="all, delete-orphan")
 
     # Optional: Relationship to the user who created it
     # creator_id = Column(Integer, ForeignKey("users.id"), nullable=True)
