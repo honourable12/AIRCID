@@ -1,69 +1,82 @@
 # app/models/question.py
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Enum as SQLEnum, Boolean
+import enum
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from app.core.database import Base
-from pydantic import BaseModel, Field
-from typing import Optional, List, Any
+from sqlalchemy import Enum as SQLEnum
+from pydantic import BaseModel
+from typing import Optional, List
 from datetime import datetime
-from enum import Enum as PyEnum # Import Python's Enum
 
-# Define QuestionType enum
-class QuestionType(str, PyEnum):
-    text = "text"
-    textarea = "textarea"
-    number = "number"
-    radio = "radio"
-    checkbox = "checkbox"
-    dropdown = "dropdown"
-    date = "date"
-    time = "time"
-    datetime = "datetime"
-    file = "file" # For file uploads
+from app.core.database import Base
+
+# Import ORM models for relationships and ForeignKeys
+from app.models.form import Form # Question needs Form for ForeignKey and relationship
+# DO NOT import app.models.response.Response here.
+# The relationship("Response") string reference is sufficient.
+
+# Import Pydantic schemas for nesting in other Pydantic schemas, if needed.
+# This import should be here IF QuestionRead needs to nest other Pydantic schemas,
+# or if it's imported by another Pydantic schema in a way that needs early resolution.
+# from app.models.response import ResponseRead # Only if QuestionRead nests ResponseRead
+
+# Define the QuestionType Enum
+class QuestionType(enum.Enum):
+    TEXT = "text"
+    NUMBER = "number"
+    SINGLE_CHOICE = "single_choice"
+    MULTI_CHOICE = "multi_choice"
 
 # SQLAlchemy ORM Model
 class Question(Base):
     __tablename__ = "questions"
 
     id = Column(Integer, primary_key=True, index=True)
-    form_id = Column(Integer, ForeignKey("forms.id"))
+    form_id = Column(Integer, ForeignKey("forms.id"), nullable=False)
     text = Column(Text, nullable=False)
-    type = Column(SQLEnum(QuestionType), nullable=False) # Store enum in DB
-    options = Column(Text, nullable=True) # Store JSON string for radio/checkbox/dropdown options
-    order = Column(Integer, nullable=False, default=0) # Order of questions in a form
-    is_required = Column(Boolean, default=False)
+    type = Column(SQLEnum(QuestionType), nullable=False)
+    options = Column(Text, nullable=True)
+    order = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    # Establish relationships
     form = relationship("Form", back_populates="questions")
-    responses = relationship("ResponseDetail", back_populates="question", cascade="all, delete-orphan")
+    # This relationship uses a string literal, so direct import of Response is not needed here
+    responses = relationship("Response", back_populates="question", cascade="all, delete-orphan")
 
 
 # Pydantic Schemas
 class QuestionBase(BaseModel):
-    form_id: Optional[int] = None # Can be set during creation or in the endpoint
-    text: str = Field(..., example="What is your full name?")
-    type: QuestionType = Field(..., example=QuestionType.text)
-    options: Optional[str] = Field(None, example='["Option 1", "Option 2"] for radio/checkbox/dropdown')
-    order: int = Field(0, example=0)
-    is_required: bool = Field(False, example=False)
+    form_id: int
+    text: str
+    type: QuestionType
+    options: Optional[str] = None
+    order: int
 
 class QuestionCreate(QuestionBase):
     pass
 
-class QuestionUpdate(BaseModel):
+class QuestionUpdate(QuestionBase):
     text: Optional[str] = None
     type: Optional[QuestionType] = None
     options: Optional[str] = None
     order: Optional[int] = None
-    is_required: Optional[bool] = None
 
 class QuestionRead(QuestionBase):
     id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # If you want to include nested responses (as Pydantic schemas), uncomment this
+    # responses: List["ResponseRead"] = [] # Use string literal for forward reference
 
     class Config:
         from_attributes = True
+        use_enum_values = False
 
-# No model_rebuild needed here as it doesn't reference other Pydantic models with string literals directly
+# IMPORTANT: If QuestionRead includes "ResponseRead", uncomment the import here AFTER QuestionRead class
+# and then call model_rebuild().
+# from app.models.response import ResponseRead # Uncomment if 'responses: List["ResponseRead"]' is used above
+
+# Call model_rebuild() for QuestionRead if it has forward references (e.g., to ResponseRead)
+# QuestionRead.model_rebuild()

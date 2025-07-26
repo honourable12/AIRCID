@@ -1,63 +1,62 @@
 # app/models/form.py
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from app.core.database import Base
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
-# Import related Pydantic schemas
-from app.models.user import UserRead # For the creator of the form
-# from app.models.study import StudyRead # Assuming forms belong to studies, this will be handled by context
-from app.models.question import QuestionRead # For questions within the form
+from app.core.database import Base
+from app.models.study import Study
+from app.models.user import User # NEW: Import the User ORM model
 
-
-# SQLAlchemy ORM Model
+# ORM Model for Forms
 class Form(Base):
     __tablename__ = "forms"
 
     id = Column(Integer, primary_key=True, index=True)
+    study_id = Column(Integer, ForeignKey("studies.id"), nullable=False)
+    # NEW: Add user_id as a ForeignKey to users.id
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     title = Column(String, index=True, nullable=False)
     description = Column(Text, nullable=True)
-    study_id = Column(Integer, ForeignKey("studies.id"))
-    creator_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    is_active = Column(Boolean, default=True) # Forms can be active/inactive
 
+    # Relationships
     study = relationship("Study", back_populates="forms")
-    creator = relationship("User", back_populates="created_forms") # Assuming a relationship from User to Form
     questions = relationship("Question", back_populates="form", cascade="all, delete-orphan")
     responses = relationship("Response", back_populates="form", cascade="all, delete-orphan")
+    # NEW: Relationship back to the User who created this form
+    created_by_user = relationship("User", back_populates="created_forms")
 
 
-# Pydantic Schemas
+# Pydantic Schemas for Forms
 class FormBase(BaseModel):
-    title: str = Field(..., min_length=1, max_length=255, example="Participant Consent Form")
-    description: Optional[str] = Field(None, example="This form collects consent from study participants.")
-    study_id: int = Field(..., example=1)
-    is_active: bool = Field(True, example=True)
+    study_id: int
+    user_id: int # NEW: Include user_id in the Pydantic schema
+    title: str
+    description: Optional[str] = None
 
 class FormCreate(FormBase):
     pass
 
-class FormUpdate(BaseModel):
+class FormUpdate(FormBase):
     title: Optional[str] = None
     description: Optional[str] = None
-    is_active: Optional[bool] = None
+    user_id: Optional[int] = None # Optional for updates, if allowed
 
 class FormRead(FormBase):
     id: int
-    creator_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
-    
-    creator: Optional[UserRead] = None # Use UserRead for the creator
-    questions: List[QuestionRead] = [] # Use QuestionRead for questions
+    questions: List["QuestionRead"] = [] # Use string literal for forward reference
 
     class Config:
         from_attributes = True
+        use_enum_values = False
 
-# Rebuild the model to resolve forward references (e.g., if any nested models were string literals, or for Pydantic v2 compatibility)
+# IMPORTANT: Import Pydantic schemas that are part of circular references *after*
+# the ORM models are defined in their respective files.
+from app.models.question import QuestionRead # This import is placed here to avoid circular imports
 FormRead.model_rebuild()

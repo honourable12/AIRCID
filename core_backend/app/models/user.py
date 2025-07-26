@@ -25,7 +25,8 @@ class User(Base):
     role = relationship("Role", back_populates="users")
     created_studies = relationship("Study", back_populates="creator", cascade="all, delete-orphan")
     # Ensure this relationship exists if forms have a creator
-    created_forms = relationship("Form", back_populates="creator", cascade="all, delete-orphan")
+    created_forms = relationship("Form", back_populates="created_by_user", cascade="all, delete-orphan")
+    participants = relationship("Participant", back_populates="user", cascade="all, delete-orphan")
 
 
 # Pydantic Schemas

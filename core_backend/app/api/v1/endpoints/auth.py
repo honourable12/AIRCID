@@ -80,7 +80,6 @@ async def register_user(
     new_user = User(
         email=user_data.email,
         hashed_password=hashed_password,
-        is_active=user_data.is_active,
         role_id=user_data.role_id
     )
     session.add(new_user)
