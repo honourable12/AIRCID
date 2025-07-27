@@ -3,10 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload # <--- NEW IMPORT
 
 from app.core.database import get_async_session
-# Import the specific functions needed from security.py
-from app.core.security import verify_password, create_access_token, get_password_hash # <-- ADD get_password_hash here
+from app.core.security import verify_password, create_access_token, get_password_hash
 from app.models.user import User, UserCreate, UserRead
 from app.models.role import Role
 
@@ -21,16 +21,13 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 class UserRegister(UserCreate):
-    pass # Inherits email, password, is_active, role_id
+    pass
 
 @router.post("/token", response_model=Token, summary="Authenticate user and get access token")
 async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     session: AsyncSession = Depends(get_async_session)
 ):
-    """
-    Authenticates a user using email and password, returning an access token upon success.
-    """
     user_query = await session.execute(select(User).where(User.email == form_data.username))
     user = user_query.scalars().first()
 
@@ -61,18 +58,17 @@ async def register_user(
             detail="Email already registered"
         )
 
-    # Hash password - CORRECTED LINE:
-    hashed_password = get_password_hash(user_data.password) # <-- CORRECTED CALL
+    # Hash password
+    hashed_password = get_password_hash(user_data.password)
 
     # Determine role_id: default to 'researcher' if not specified
     if user_data.role_id is None:
         researcher_role_query = await session.execute(select(Role).where(Role.name == "researcher"))
         researcher_role = researcher_role_query.scalars().first()
         if not researcher_role:
-            # Fallback or raise error if 'researcher' role isn't seeded
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Researcher role not found. Please seed the database."
+                detail="Researcher role not found. Please seed the database with 'researcher' role."
             )
         user_data.role_id = researcher_role.id
 
@@ -83,7 +79,34 @@ async def register_user(
         role_id=user_data.role_id
     )
     session.add(new_user)
-    await session.commit()
-    await session.refresh(new_user)
+    
+    try:
+        await session.commit()
+        # After commit, the new_user object might be detached, especially relationships.
+        # We need to re-query or explicitly load the relationship.
+
+        # Option A (Recommended for this case): Refresh with selectinload
+        # This will load the 'role' relationship immediately with the user.
+        await session.refresh(new_user, attribute_names=["role"]) # <--- CRUCIAL CHANGE: Load 'role' explicitly
+        
+        # Ensure the role object is fully loaded for Pydantic serialization
+        # The above refresh might be enough, but if not, an explicit select:
+        # result = await session.execute(
+        #     select(User)
+        #     .options(selectinload(User.role)) # Eagerly load the role
+        #     .where(User.id == new_user.id)
+        # )
+        # new_user = result.scalars().first()
+        # if not new_user:
+        #     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User not found after creation.")
+
+    except Exception as e:
+        await session.rollback()
+        # Catch foreign key violations more gracefully if needed, though the 'role_id=0' was the previous issue.
+        # Now it's likely that 'researcher' role wasn't found if it fails here.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error registering user: {e}"
+        ) from e
 
     return new_user
