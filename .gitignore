@@ -22,6 +22,8 @@ core_backend/chroma_db/
 core_backend/core_backend.egg-info/
 core_backend/seed.py
 core_backend/test_api.ps1
+core_backend/doc.txt
+
 
 
 
