@@ -17,14 +17,13 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
-    is_active = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True) 
     role_id = Column(Integer, ForeignKey("roles.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     role = relationship("Role", back_populates="users")
     created_studies = relationship("Study", back_populates="creator", cascade="all, delete-orphan")
-    # Ensure this relationship exists if forms have a creator
     created_forms = relationship("Form", back_populates="created_by_user", cascade="all, delete-orphan")
     participants = relationship("Participant", back_populates="user", cascade="all, delete-orphan")
 
@@ -45,15 +44,13 @@ class UserUpdate(BaseModel):
 
 class UserRead(UserBase):
     id: int
-    is_active: bool
+    is_active: bool 
     role_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
-    # This field MUST be RoleRead (Pydantic model), not Role (SQLAlchemy ORM model)
     role: Optional[RoleRead] = None 
 
     class Config:
         from_attributes = True
 
-# Crucial for resolving forward references, especially in complex interconnected models
 UserRead.model_rebuild()

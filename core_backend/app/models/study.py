@@ -1,7 +1,7 @@
 # app/models/study.py
 import enum
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum as SQLEnum
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 from app.core.database import Base
 from pydantic import BaseModel
@@ -27,7 +27,16 @@ class Study(Base):
     description = Column(Text, nullable=True)
     creator_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     # Add the status column using SQLEnum
-    status = Column(SQLEnum(StudyStatus), default=StudyStatus.PENDING, nullable=False)
+    status = Column(
+    SQLEnum(
+        StudyStatus,
+        name="studystatus",
+        values_callable=lambda x: [e.value for e in x],  # ✅ forces "pending", not "PENDING"
+        native_enum=True
+    ),
+    default=StudyStatus.PENDING,
+    nullable=False
+)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -38,30 +47,31 @@ class Study(Base):
 
 
 # Pydantic Schemas
+# This is the base model for a study, used for reading from the API.
 class StudyBase(BaseModel):
     title: str
     description: Optional[str] = None
+    status: StudyStatus = StudyStatus.PENDING
     creator_id: int
-    # Add status field to Pydantic base model
-    status: StudyStatus = StudyStatus.PENDING # Default value
 
-class StudyCreate(StudyBase):
-    pass
+# This model is what the API expects for creating a new study.
+# It only contains the fields the user provides via the frontend form.
+class StudyCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
 
-class StudyUpdate(StudyBase):
+# This model is for updating a study.
+class StudyUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     status: Optional[StudyStatus] = None # Allow updating status
 
+# This model is for reading a study from the database.
 class StudyRead(StudyBase):
     id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
-    creator: Optional[UserRead] = None
+    creator_email: Optional[str] = None
 
     class Config:
         from_attributes = True
-        # Allow Pydantic to handle Enum values correctly
-        use_enum_values = False
-
-StudyRead.model_rebuild()

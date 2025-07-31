@@ -9,7 +9,7 @@ llm_service/.pytest_cache/
 llm_service/chroma_db/
 llm_service/llm_service.egg-info/
 llm_service/documents.db
-llm_service/doc.txt
+
 
 core_backend/.venv/
 core_backend/.env
@@ -22,7 +22,6 @@ core_backend/chroma_db/
 core_backend/core_backend.egg-info/
 core_backend/seed.py
 core_backend/test_api.ps1
-core_backend/doc.txt
 
 
 
