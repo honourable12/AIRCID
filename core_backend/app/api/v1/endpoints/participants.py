@@ -9,7 +9,7 @@ from app.core.database import get_async_session
 from app.api.dependencies.auth import get_current_user, get_researcher_or_admin_user, get_admin_user
 from app.models.participant import Participant, ParticipantCreate, ParticipantRead, ParticipantUpdate
 from app.models.user import User # For current_user type hint, should be ORM User
-# from app.models.study import Study # If linking participants to studies and checking access
+from app.models.study import Study # If linking participants to studies and checking access
 
 router = APIRouter()
 
@@ -24,118 +24,100 @@ async def create_participant(
 ):
     """
     Register a new participant.
-    - Can be anonymous (no user_id provided).
-    - Can be linked to an existing user if `user_id` is provided and a researcher/admin is creating it.
-    - Researchers can create participants for studies they own. Administrators can create any.
+    - Only users with 'researcher' or 'administrator' roles can register participants.
+    - An anonymous participant can be created by a logged-in researcher/admin.
+    - A participant linked to an existing user can also be created.
     """
+    # Check if the study exists
+    study_query = await session.execute(select(Study).where(Study.id == participant_create.study_id))
+    study_exists = study_query.scalars().first()
+    if not study_exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Study not found")
+
+    # If a user ID is provided, ensure the user exists
     if participant_create.user_id:
-        # If user_id is provided, verify it's a valid user
         user_query = await session.execute(select(User).where(User.id == participant_create.user_id))
-        user = user_query.scalars().first()
-        if not user:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User specified for participant not found")
-        
-        # If current_user is a researcher, ensure they have rights to link this user as participant
-        # (e.g., within a study they manage)
-        # TODO: Implement granular authorization if linking participants to specific studies/users by researchers.
-        if current_user and current_user.role.name == "researcher":
-            # Example: Check if current_user can create participants linked to this user_id/study
-            pass # Placeholder for actual authorization logic
+        user_exists = user_query.scalars().first()
+        if not user_exists:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     db_participant = Participant(**participant_create.model_dump())
     session.add(db_participant)
     await session.commit()
-    # Eager load relationships if ParticipantRead includes them (e.g., 'user')
-    await session.refresh(db_participant, attribute_names=["user"])
-    return db_participant
+    await session.refresh(db_participant)
+    
+    # After creating and refreshing, load the relationships to be included in the response
+    # The `select` statement now includes `selectinload` for both the `user` and `study` relationships
+    result = await session.execute(
+        select(Participant)
+        .where(Participant.id == db_participant.id)
+        .options(
+            selectinload(Participant.user),
+            selectinload(Participant.study),
+        )
+    )
+    loaded_participant = result.scalars().first()
 
+    return loaded_participant
 
-@router.get("/", response_model=List[ParticipantRead], summary="Get all participants (Admin) or those researcher has access to")
-async def read_participants(
+@router.get("/", response_model=List[ParticipantRead], summary="Get all participants")
+async def get_all_participants(
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_researcher_or_admin_user), # Only researchers/admins can list participants
-    user_id: Optional[int] = None # Optional filter by user_id
+    current_user: User = Depends(get_researcher_or_admin_user)
 ):
     """
-    Retrieve a list of participants, optionally filtered by user ID.
-    - Administrators can see all participants.
-    - Researchers can see participants linked to studies they are authorized for.
+    Retrieve a list of all participants.
+    - This is restricted to 'researcher' or 'administrator' roles.
     """
-    query = select(Participant)
-    if user_id:
-        query = query.where(Participant.user_id == user_id)
-
-    # Eager load relationships if ParticipantRead includes them
-    query = query.options(selectinload(Participant.user))
-
-    # TODO: Implement granular authorization based on user roles and study ownership
-    if current_user.role.name == "researcher":
-        # Example: Filter participants to only those from studies created by the researcher
-        # This would require linking participants to studies and then filtering
-        pass # Placeholder for actual filtering logic
-    elif current_user.role.name != "administrator":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view participants")
-
-    participants_query = await session.execute(query)
-    participants = participants_query.scalars().all()
+    # Load participants and their associated user and study relationships
+    result = await session.execute(
+        select(Participant).options(selectinload(Participant.user), selectinload(Participant.study))
+    )
+    participants = result.scalars().all()
     return participants
 
 @router.get("/{participant_id}", response_model=ParticipantRead, summary="Get a participant by ID")
-async def read_participant(
+async def get_participant(
     participant_id: int,
     session: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_researcher_or_admin_user)
 ):
     """
-    Retrieve a single participant by its ID.
-    - Administrators can view any participant.
-    - Researchers can view participants linked to studies they are authorized for.
+    Retrieve a single participant by their ID.
+    - This is restricted to 'researcher' or 'administrator' roles.
     """
-    participant_query = await session.execute(
+    # Load participant with associated user and study relationships
+    result = await session.execute(
         select(Participant)
         .where(Participant.id == participant_id)
-        .options(selectinload(Participant.user)) # Eager load the related user
+        .options(selectinload(Participant.user), selectinload(Participant.study))
     )
-    db_participant = participant_query.scalars().first()
-
+    db_participant = result.scalars().first()
     if not db_participant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participant not found")
-
-    # TODO: Implement granular authorization based on user roles and study ownership
-    # if current_user.role.name == "researcher" and not user_has_access_to_participant_study(current_user, db_participant):
-    #     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this participant")
-
     return db_participant
 
-@router.put("/{participant_id}", response_model=ParticipantRead, summary="Update an existing participant")
+@router.put("/{participant_id}", response_model=ParticipantRead, summary="Update a participant")
 async def update_participant(
     participant_id: int,
     participant_update: ParticipantUpdate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_researcher_or_admin_user)
+    current_user: User = Depends(get_admin_user) # Only administrators can update participants, for now.
 ):
     """
     Update an existing participant by its ID.
-    - Administrators can update any participant.
-    - Researchers can update participants within studies they are authorized for.
+    - This action is restricted to 'administrator' roles.
     """
-    participant_query = await session.execute(
+    # Fetch the participant to update, eagerly loading related data
+    result = await session.execute(
         select(Participant)
         .where(Participant.id == participant_id)
-        .options(selectinload(Participant.user))
+        .options(selectinload(Participant.user), selectinload(Participant.study))
     )
-    db_participant = participant_query.scalars().first()
+    db_participant = result.scalars().first()
 
     if not db_participant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participant not found")
-    
-    # If updating user_id, perform checks similar to create_participant
-    if participant_update.user_id is not None and participant_update.user_id != db_participant.user_id:
-        user_query = await session.execute(select(User).where(User.id == participant_update.user_id))
-        new_user = user_query.scalars().first()
-        if not new_user:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="New user specified for participant not found")
-        # TODO: Add authorization check for current_user to link to new_user
 
     # TODO: Implement granular authorization based on user roles and study ownership
     # if current_user.role.name == "researcher" and not user_has_access_to_participant_study(current_user, db_participant):
@@ -164,7 +146,8 @@ async def delete_participant(
 
     if not db_participant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participant not found")
-
+    
     await session.delete(db_participant)
     await session.commit()
     return
+

@@ -5,7 +5,7 @@ from sqlalchemy.future import select
 from app.core.database import get_async_session
 from app.models.study import Study # Example model to export
 from app.models.user import User # For current_user type hint and authorization
-from app.api.dependencies.auth import get_current_user, get_admin_user # Your dependencies for authenticated user
+from app.api.dependencies.auth import get_current_user, get_researcher_or_admin_user # Your dependencies for authenticated user
 from starlette.responses import StreamingResponse
 import pandas as pd
 import io
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/export", tags=["Data Export"])
              description="Exports all research studies data in CSV format. Requires administrator access.")
 async def export_studies_csv(
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_admin_user) # Only administrators can export all studies
+    current_user: User = Depends(get_researcher_or_admin_user) # Only administrators can export all studies
 ):
     """
     Exports all studies data to a CSV file.
@@ -60,7 +60,7 @@ async def export_studies_csv(
              description="Exports all research studies data in Parquet format. Requires administrator access.")
 async def export_studies_parquet(
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_admin_user) # Only administrators can export all studies
+    current_user: User = Depends(get_researcher_or_admin_user) # Only administrators can export all studies
 ):
     """
     Exports all studies data to a Parquet file.
