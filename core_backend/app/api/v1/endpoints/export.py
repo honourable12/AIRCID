@@ -98,5 +98,100 @@ async def export_studies_parquet(
         headers={"Content-Disposition": "attachment; filename=studies.parquet"}
     )
 
-# You can add more export endpoints here (e.g., for forms, questions, responses)
-# and add more granular authorization (e.g., researcher can export their own studies' data)
+# Export forms for a specific study (researcher or admin)
+@router.get("/studies/{study_id}/forms/csv", summary="Export forms for a study as CSV")
+async def export_forms_csv(
+    study_id: int,
+    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_researcher_or_admin_user)
+):
+    # Check study ownership if not admin
+    study = await session.get(Study, study_id)
+    if not study:
+        raise HTTPException(status_code=404, detail="Study not found")
+    if not current_user.is_admin and study.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to export this study's forms")
+
+    # Fetch forms
+    from app.models.form import Form
+    result = await session.execute(select(Form).where(Form.study_id == study_id))
+    forms = result.scalars().all()
+    if not forms:
+        raise HTTPException(status_code=404, detail="No forms found for this study")
+
+    data_for_df = [form.__dict__ for form in forms]
+    df = pd.DataFrame(data_for_df)
+    output = io.StringIO()
+    df.to_csv(output, index=False)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=study_{study_id}_forms.csv"}
+    )
+
+# Export questions for a specific form (researcher or admin)
+@router.get("/forms/{form_id}/questions/csv", summary="Export questions for a form as CSV")
+async def export_questions_csv(
+    form_id: int,
+    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_researcher_or_admin_user)
+):
+    from app.models.form import Form
+    from app.models.question import Question
+    form = await session.get(Form, form_id)
+    if not form:
+        raise HTTPException(status_code=404, detail="Form not found")
+    # Check study ownership if not admin
+    study = await session.get(Study, form.study_id)
+    if not current_user.is_admin and study.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to export this form's questions")
+
+    result = await session.execute(select(Question).where(Question.form_id == form_id))
+    questions = result.scalars().all()
+    if not questions:
+        raise HTTPException(status_code=404, detail="No questions found for this form")
+
+    data_for_df = [q.__dict__ for q in questions]
+    df = pd.DataFrame(data_for_df)
+    output = io.StringIO()
+    df.to_csv(output, index=False)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=form_{form_id}_questions.csv"}
+    )
+
+# Export responses for a specific study (researcher or admin)
+@router.get("/studies/{study_id}/responses/csv", summary="Export responses for a study as CSV")
+async def export_responses_csv(
+    study_id: int,
+    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_researcher_or_admin_user)
+):
+    from app.models.response import Response as StudyResponse
+    study = await session.get(Study, study_id)
+    if not study:
+        raise HTTPException(status_code=404, detail="Study not found")
+    if not current_user.is_admin and study.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to export this study's responses")
+
+    result = await session.execute(select(StudyResponse).where(StudyResponse.study_id == study_id))
+    responses = result.scalars().all()
+    if not responses:
+        raise HTTPException(status_code=404, detail="No responses found for this study")
+
+    data_for_df = [r.__dict__ for r in responses]
+    df = pd.DataFrame(data_for_df)
+    output = io.StringIO()
+    df.to_csv(output, index=False)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=study_{study_id}_responses.csv"}
+    )
+
+#TODO You can add more export endpoints here (e.g., for forms, questions, responses)
+#TODO and add more granular authorization (e.g., researcher can export their own studies' data)
