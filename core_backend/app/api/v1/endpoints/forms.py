@@ -28,81 +28,70 @@ async def create_form(
     study_query = await session.execute(select(Study).where(Study.id == form_create.study_id))
     study = study_query.scalars().first()
     if not study:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Study not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Study not found.")
 
-    db_form = Form(
-        **form_create.model_dump(),
-        creator_id=current_user.id
+    new_form = Form(
+        study_id=form_create.study_id,
+        user_id=current_user.id, # Assign the current user as the creator
+        title=form_create.title,
+        description=form_create.description
     )
-    session.add(db_form)
+    session.add(new_form)
     await session.commit()
-    await session.refresh(db_form)
+    await session.refresh(new_form)
+    # Eagerly load the questions for the response
+    new_form.questions # This will trigger the lazy load now that the session is active.
+    return new_form
 
-    # Eagerly load creator, study, and questions for the response model
-    form_with_relations = await session.execute(
-        select(Form)
-        .where(Form.id == db_form.id)
-        .options(
-            selectinload(Form.creator),
-            selectinload(Form.study),
-            selectinload(Form.questions) # Load questions if FormRead includes them
-        )
-    )
-    return form_with_relations.scalars().first()
-
-@router.get("/by_study/{study_id}", response_model=List[FormRead], summary="Get forms for a specific study")
+@router.get("/by_study/{study_id}", response_model=List[FormRead], summary="Get all forms for a specific study")
 async def get_forms_by_study(
     study_id: int,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_researcher_or_admin_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
-    Retrieve all forms associated with a specific study ID.
-    - Accessible by 'researcher' or 'administrator' roles.
+    Retrieve all forms associated with a given study ID.
     """
-    # Check if the study exists
-    study_query = await session.execute(select(Study).where(Study.id == study_id))
-    study = study_query.scalars().first()
-    if not study:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Study not found")
+    # Check if the study exists first
+    study_exists = await session.scalar(select(Study.id).where(Study.id == study_id))
+    if not study_exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Study not found.")
 
+    # Eagerly load the `questions` relationship to prevent MissingGreenlet errors.
+    # This ensures that when the FormRead model is validated, the `form.questions`
+    # attribute is already populated within the active session context.
     result = await session.execute(
         select(Form)
         .where(Form.study_id == study_id)
-        .options(
-            selectinload(Form.creator),
-            selectinload(Form.study),
-            selectinload(Form.questions)
-        )
+        .options(selectinload(Form.questions))
     )
     forms = result.scalars().all()
-    return forms
 
-@router.get("/{form_id}", response_model=FormRead, summary="Get a form by ID")
-async def get_form_by_id(
+    # The validation will now succeed because `form.questions` is pre-loaded.
+    return [FormRead.model_validate(form, from_attributes=True) for form in forms]
+
+
+@router.get("/{form_id}", response_model=FormRead, summary="Get a single form by ID")
+async def get_form(
     form_id: int,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_researcher_or_admin_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Retrieve a single form by its ID.
-    - Accessible by 'researcher' or 'administrator' roles.
     """
+    # Also eagerly load questions here to avoid the same error
     result = await session.execute(
         select(Form)
         .where(Form.id == form_id)
-        .options(
-            selectinload(Form.creator),
-            selectinload(Form.study),
-            selectinload(Form.questions)
-        )
+        .options(selectinload(Form.questions))
     )
-    form = result.scalars().first()
-    if not form:
+    db_form = result.scalars().first()
+    if not db_form:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
-    return form
+    return db_form
 
-@router.put("/{form_id}", response_model=FormRead, summary="Update a form by ID")
+@router.put("/{form_id}", response_model=FormRead, summary="Update an existing form")
 async def update_form(
     form_id: int,
     form_update: FormUpdate,
@@ -116,15 +105,16 @@ async def update_form(
     result = await session.execute(
         select(Form)
         .where(Form.id == form_id)
-        .options(
-            selectinload(Form.creator),
-            selectinload(Form.study),
-            selectinload(Form.questions)
-        )
+        .options(selectinload(Form.created_by_user)) # Load creator to check permissions
     )
     db_form = result.scalars().first()
+
     if not db_form:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
+
+    # Check for authorization. Creator must be current user or user must be admin.
+    if current_user.role.name == "researcher" and db_form.created_by_user.id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this form.")
 
     update_data = form_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
@@ -133,7 +123,16 @@ async def update_form(
     session.add(db_form)
     await session.commit()
     await session.refresh(db_form)
-    return db_form
+    
+    # Eagerly load the questions for the response
+    result_refreshed = await session.execute(
+        select(Form)
+        .where(Form.id == form_id)
+        .options(selectinload(Form.questions))
+    )
+    db_form_refreshed = result_refreshed.scalars().first()
+    
+    return db_form_refreshed
 
 @router.delete("/{form_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a form by ID")
 async def delete_form(
@@ -147,9 +146,14 @@ async def delete_form(
     """
     result = await session.execute(select(Form).where(Form.id == form_id))
     db_form = result.scalars().first()
+
     if not db_form:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
-    
+
+    # Check authorization based on the user's role
+    if current_user.role.name == "researcher" and db_form.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this form.")
+
     await session.delete(db_form)
     await session.commit()
-    return
+    return None

@@ -1,14 +1,24 @@
 # app/models/form.py
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped
 from sqlalchemy.sql import func
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
 from app.core.database import Base
 from app.models.study import Study
-from app.models.user import User # NEW: Import the User ORM model
+from app.models.user import UserRead
+# NEW: Import the User ORM model to be used in the relationship
+from app.models.user import User 
+
+# Define a Pydantic schema for QuestionRead as a forward reference
+class QuestionRead(BaseModel):
+    id: int
+    form_id: int
+    text: str
+    type: str
+    model_config = ConfigDict(from_attributes=True)
 
 # ORM Model for Forms
 class Form(Base):
@@ -16,7 +26,6 @@ class Form(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     study_id = Column(Integer, ForeignKey("studies.id"), nullable=False)
-    # NEW: Add user_id as a ForeignKey to users.id
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     title = Column(String, index=True, nullable=False)
     description = Column(Text, nullable=True)
@@ -27,36 +36,30 @@ class Form(Base):
     study = relationship("Study", back_populates="forms")
     questions = relationship("Question", back_populates="form", cascade="all, delete-orphan")
     responses = relationship("Response", back_populates="form", cascade="all, delete-orphan")
-    # NEW: Relationship back to the User who created this form
     created_by_user = relationship("User", back_populates="created_forms")
 
 
 # Pydantic Schemas for Forms
 class FormBase(BaseModel):
     study_id: int
-    user_id: int # NEW: Include user_id in the Pydantic schema
     title: str
     description: Optional[str] = None
 
+# We inherit from FormBase but don't add user_id, as it will be set by the endpoint
 class FormCreate(FormBase):
     pass
 
 class FormUpdate(FormBase):
     title: Optional[str] = None
     description: Optional[str] = None
-    user_id: Optional[int] = None # Optional for updates, if allowed
+    # user_id is now handled by the backend, no longer needed in update schema
 
 class FormRead(FormBase):
     id: int
+    user_id: int
+    created_by_user: UserRead # Add the relationship here to return the user
     created_at: datetime
     updated_at: Optional[datetime] = None
-    questions: List["QuestionRead"] = [] # Use string literal for forward reference
+    questions: List[QuestionRead] = []
 
-    class Config:
-        from_attributes = True
-        use_enum_values = False
-
-# IMPORTANT: Import Pydantic schemas that are part of circular references *after*
-# the ORM models are defined in their respective files.
-from app.models.question import QuestionRead # This import is placed here to avoid circular imports
-FormRead.model_rebuild()
+    model_config = ConfigDict(from_attributes=True)
