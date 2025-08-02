@@ -8,11 +8,10 @@ from typing import List, Optional
 from app.core.database import get_async_session
 from app.api.dependencies.auth import get_current_user, get_researcher_or_admin_user, get_admin_user
 
-# Import the ORM models and Pydantic schemas from their correct locations
-# DO NOT DEFINE ORM MODELS HERE. IMPORT THEM FROM app.models
 from app.models.question import Question, QuestionCreate, QuestionRead, QuestionUpdate, QuestionType
 from app.models.form import Form # Needed to check form existence
 from app.models.user import User # For current_user type hint
+from app.models.study import Study # Needed for study ownership check
 
 router = APIRouter()
 
@@ -27,16 +26,19 @@ async def create_question(
     - Researchers can create questions for forms within studies they own.
     - Administrators can create questions for any form.
     """
-    # Verify that the form exists
-    form_query = await session.execute(select(Form).where(Form.id == question_create.form_id))
+    # Verify that the form exists and get its associated study creator
+    form_query = await session.execute(
+        select(Form)
+        .where(Form.id == question_create.form_id)
+        .options(selectinload(Form.study)) # Eager load the study to check ownership
+    )
     form = form_query.scalars().first()
     if not form:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
 
-    # TODO: Implement granular ownership check for the form's parent study
-    # if current_user.role.name == "researcher":
-    #     if form.study.creator_id != current_user.id: # Assuming form has a study relationship
-    #         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to add questions to this form")
+    # Implement granular ownership check for the form's parent study
+    if current_user.role.name == "researcher" and form.study.creator_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to add questions to this form")
 
     db_question = Question(**question_create.model_dump())
     session.add(db_question)
@@ -59,17 +61,14 @@ async def read_questions(
     if form_id:
         query = query.where(Question.form_id == form_id)
 
-    # Eager load relationships if QuestionRead includes them
-    query = query.options(selectinload(Question.form)) # Assuming QuestionRead might include Form details
+    # Eager load relationships
+    query = query.options(selectinload(Question.form).selectinload(Form.study))
 
-    # TODO: Granular access check:
-    # If current_user is a researcher, filter results based on studies they own
+    # Granular access check: If current_user is a researcher, filter results based on studies they own
     if current_user.role.name == "researcher":
-        # Example: Filter questions to only those from forms within studies created by the researcher
-        # This would require linking forms to studies, and then filtering by study.creator_id
-        # (e.g., query = query.join(Form).join(Study).where(Study.creator_id == current_user.id))
-        pass # Placeholder for actual filtering logic
+        query = query.join(Form).join(Study).where(Study.creator_id == current_user.id)
     elif current_user.role.name != "administrator":
+        # This case is a safeguard, but `get_researcher_or_admin_user` already handles it.
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view questions")
 
     questions_query = await session.execute(query)
@@ -90,17 +89,16 @@ async def read_question(
     question_query = await session.execute(
         select(Question)
         .where(Question.id == question_id)
-        .options(selectinload(Question.form)) # Eager load the related form
+        .options(selectinload(Question.form).selectinload(Form.study)) # Eager load the related form and study
     )
     db_question = question_query.scalars().first()
 
     if not db_question:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
 
-    # TODO: Implement granular ownership check for the question's parent form/study
-    # if current_user.role.name == "researcher":
-    #     if db_question.form.study.creator_id != current_user.id: # Assuming form and study relationships
-    #         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this question")
+    # Implement granular ownership check for the question's parent study
+    if current_user.role.name == "researcher" and db_question.form.study.creator_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this question")
 
     return db_question
 
@@ -119,17 +117,16 @@ async def update_question(
     question_query = await session.execute(
         select(Question)
         .where(Question.id == question_id)
-        .options(selectinload(Question.form))
+        .options(selectinload(Question.form).selectinload(Form.study))
     )
     db_question = question_query.scalars().first()
 
     if not db_question:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
 
-    # TODO: Implement granular ownership check for the question's parent form/study
-    # if current_user.role.name == "researcher":
-    #     if db_question.form.study.creator_id != current_user.id: # Assuming form and study relationships
-    #         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this question")
+    # Implement granular ownership check for the question's parent study
+    if current_user.role.name == "researcher" and db_question.form.study.creator_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this question")
 
     update_data = question_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
@@ -144,23 +141,27 @@ async def update_question(
 async def delete_question(
     question_id: int,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_admin_user) # Only administrators can delete questions directly
+    current_user: User = Depends(get_researcher_or_admin_user)
 ):
     """
-    Delete a question by its ID. This action is restricted to 'administrator' roles.
+    Delete a question by its ID. This action is restricted to 'administrator' roles
+    or researchers who own the parent study.
     """
-    question_query = await session.execute(select(Question).where(Question.id == question_id))
+    question_query = await session.execute(
+        select(Question)
+        .where(Question.id == question_id)
+        .options(selectinload(Question.form).selectinload(Form.study))
+    )
     db_question = question_query.scalars().first()
 
     if not db_question:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
 
-    # TODO: Potentially allow researchers to delete questions for their studies,
-    # but ensure cascade delete rules are respected
-    # if current_user.role.name == "researcher":
-    #     if db_question.form.study.creator_id != current_user.id:
-    #         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this question")
+    # Allow researchers to delete questions for their studies, or allow administrators
+    if current_user.role.name == "researcher" and db_question.form.study.creator_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this question")
+    # If the user is an admin, they are allowed by the `get_researcher_or_admin_user` dependency.
 
     await session.delete(db_question)
     await session.commit()
-    return
+    return None

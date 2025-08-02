@@ -7,7 +7,7 @@ from app.core.database import create_db_and_tables, get_async_session
 import app.models
 
 from app.core.audit_middleware import set_audit_context, clear_audit_context, setup_audit_listeners
-from app.api.v1.endpoints import auth, users, studies, forms, questions, responses, participants, export
+from app.api.v1.endpoints import auth, users, studies, forms, questions, responses, participants, export, llm
 from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
@@ -80,6 +80,7 @@ app.include_router(questions.router, prefix="/api/v1/questions", tags=["Question
 app.include_router(responses.router, prefix="/api/v1/responses", tags=["Responses"])
 app.include_router(participants.router, prefix="/api/v1/participants", tags=["Participants"])
 app.include_router(export.router, prefix="/api/v1", tags=["Exports"])
+app.include_router(llm.router, prefix="/api/v1/llm", tags=["LLM Service"])
 
 
 @app.get("/")

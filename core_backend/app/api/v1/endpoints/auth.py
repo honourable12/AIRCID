@@ -1,14 +1,15 @@
 # app/api/v1/endpoints/auth.py
+from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload # <--- NEW IMPORT
-
+from sqlalchemy.orm import selectinload
 from app.core.database import get_async_session
 from app.core.security import verify_password, create_access_token, get_password_hash
 from app.models.user import User, UserCreate, UserRead
 from app.models.role import Role
+from app.api.dependencies.auth import create_llm_service_user, get_llm_service_token # Import the new functions
 
 from pydantic import BaseModel
 from typing import Optional
@@ -19,6 +20,7 @@ router = APIRouter()
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    llm_service_token: Optional[str] = None # Added for LLM service token
 
 class UserRegister(UserCreate):
     pass
@@ -30,16 +32,31 @@ async def login_for_access_token(
 ):
     user_query = await session.execute(select(User).where(User.email == form_data.username))
     user = user_query.scalars().first()
-
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Eagerly load the user's role for the LLM service calls
+    user_with_role_query = await session.execute(
+        select(User).where(User.email == user.email).options(selectinload(User.role))
+    )
+    user_with_role = user_with_role_query.scalars().first()
 
-    access_token = create_access_token(data={"sub": user.email, "user_id": user.id, "role_id": user.role_id})
-    return {"access_token": access_token, "token_type": "bearer"}
+    # After successful authentication, synchronize the user with the LLM service and get a token
+    await create_llm_service_user(user_with_role)
+    llm_service_token = await get_llm_service_token(user_with_role)
+
+    access_token = create_access_token(
+        data={"sub": user.email, "user_id": user.id, "role_id": user.role_id}
+    )
+    return {
+        "access_token": access_token, 
+        "token_type": "bearer",
+        "llm_service_token": llm_service_token # Return the token to the client
+    }
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED, summary="Register a new user")
 async def register_user(
@@ -82,28 +99,9 @@ async def register_user(
     
     try:
         await session.commit()
-        # After commit, the new_user object might be detached, especially relationships.
-        # We need to re-query or explicitly load the relationship.
-
-        # Option A (Recommended for this case): Refresh with selectinload
-        # This will load the 'role' relationship immediately with the user.
-        await session.refresh(new_user, attribute_names=["role"]) # <--- CRUCIAL CHANGE: Load 'role' explicitly
-        
-        # Ensure the role object is fully loaded for Pydantic serialization
-        # The above refresh might be enough, but if not, an explicit select:
-        # result = await session.execute(
-        #     select(User)
-        #     .options(selectinload(User.role)) # Eagerly load the role
-        #     .where(User.id == new_user.id)
-        # )
-        # new_user = result.scalars().first()
-        # if not new_user:
-        #     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User not found after creation.")
-
+        await session.refresh(new_user, attribute_names=["role"])
     except Exception as e:
         await session.rollback()
-        # Catch foreign key violations more gracefully if needed, though the 'role_id=0' was the previous issue.
-        # Now it's likely that 'researcher' role wasn't found if it fails here.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error registering user: {e}"
