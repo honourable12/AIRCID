@@ -1,0 +1,10 @@
+core_backend/.pytest_cache
+core_backend/.venv
+core_backend/app/__pycache__
+core_backend/app/api/__pycache__
+core_backend/app/api/dependencies/__pycache__
+core_backend/app/api/endpoints/__pycache__
+core_backend/app/api/endpoints/v1/__pycache__
+core_backend/app/core/__pycache__
+core_backend/app/models/__pycache__
+core_backend/app/tests/__pycache__
