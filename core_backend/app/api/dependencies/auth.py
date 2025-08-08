@@ -2,7 +2,7 @@
 import os
 import httpx
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List
+from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status, Security
@@ -15,7 +15,6 @@ from app.core.database import get_async_session
 from app.models.user import User
 from app.models.role import Role
 from app.models.role import RoleName
-from pydantic import BaseModel
 
 # --- Core Authentication Dependencies ---
 
@@ -39,9 +38,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 async def get_current_user(token: str = Depends(oauth2_scheme), session: AsyncSession = Depends(get_async_session)) -> User:
-    """
-    Dependency to get the current authenticated user with their role eagerly loaded.
-    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -55,14 +51,16 @@ async def get_current_user(token: str = Depends(oauth2_scheme), session: AsyncSe
     except JWTError:
         raise credentials_exception
     
-    # Perform a single, efficient query that eagerly loads the user's role
+    user_query = await session.execute(select(User).where(User.email == username))
+    user = user_query.scalars().first()
+    
+    if user is None:
+        raise credentials_exception
+    
     user_with_role_query = await session.execute(
         select(User).where(User.email == username).options(selectinload(User.role))
     )
     user_with_role = user_with_role_query.scalars().first()
-
-    if user_with_role is None:
-        raise credentials_exception
 
     if not user_with_role.is_active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
@@ -71,7 +69,6 @@ async def get_current_user(token: str = Depends(oauth2_scheme), session: AsyncSe
 
 async def get_researcher_or_admin_user(current_user: User = Depends(get_current_user)) -> User:
     """Dependency to check if the current user is a researcher or an administrator."""
-    # The current_user object is now guaranteed to have the role attribute loaded
     if not current_user.role or current_user.role.name not in [RoleName.researcher, RoleName.administrator]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -81,7 +78,6 @@ async def get_researcher_or_admin_user(current_user: User = Depends(get_current_
 
 async def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
     """Dependency to check if the current user is an administrator."""
-    # The current_user object is now guaranteed to have the role attribute loaded
     if not current_user.role or current_user.role.name != RoleName.administrator:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -98,56 +94,60 @@ async def get_llm_admin_user(
     api_key: str = Security(api_key_header),
     session: AsyncSession = Depends(get_async_session)
 ):
-    """
-    Dependency for internal LLM service calls.
-    Returns a mock admin user if the API key is valid.
-    """
     if api_key != LLM_SERVICE_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid LLM API Key"
         )
     
-    # This mock user is only used for service-to-service communication
     mock_llm_user = User(
         id=-1,
         email="llm_service@example.com",
         username="llm_service_admin",
-        role=Role(name="administrator"),
+        role=Role(name="administrator")
     )
     return mock_llm_user
 
-# --- LLM Service Communication Schemas ---
-# Pydantic model for the data sent to the LLM service for a token
-class LLMServiceTokenRequest(BaseModel):
-    user_id: str  # Corrected to string
-    username: str
-    roles: List[str]
-
 # --- LLM Service Communication Functions ---
+
+async def create_llm_service_user(user: User):
+    """
+    Calls the LLM service API to create a new user.
+    """
+    llm_service_url = os.environ.get("LLM_SERVICE_URL", "http://llm_service_host:port")
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                f"{llm_service_url}/api/v1/users/",
+                headers={"X-LLM-Api-Key": LLM_SERVICE_API_KEY},
+                json={
+                    "email": user.email,
+                    "username": user.email,
+                    "role": user.role
+                },
+                timeout=5.0
+            )
+            response.raise_for_status()
+            print(f"User {user.email} successfully created in LLM service.")
+        except httpx.HTTPStatusError as e:
+            print(f"Could not create user in LLM service. Status: {e.response.status_code}, Detail: {e.response.text}")
+        except httpx.RequestError as e:
+            print(f"An error occurred while calling LLM service: {e}")
 
 async def get_llm_service_token(user: User) -> Optional[str]:
     """
     Calls the LLM service API to get a JWT token for a specific user.
-    The role is dynamically retrieved from the user object, not hardcoded.
     """
-    if not user.role:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"User {user.email} has no assigned role.")
-
     llm_service_url = os.environ.get("LLM_SERVICE_URL", "http://llm_service_host:port")
-    
-    # Create the data payload using the Pydantic model
-    token_payload = LLMServiceTokenRequest(
-        user_id=str(user.id),  # Corrected to cast to string
-        username=user.email,
-        roles=[user.role.name]  # Use the user's role name
-    )
-    
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                f"{llm_service_url}/token",
-                json=token_payload.model_dump(),
+                f"{llm_service_url}/api/v1/token",
+                json={
+                    "user_id": user.id,
+                    "username": user.username,
+                    "roles": [user.role.name]
+                },
                 headers={"X-LLM-Api-Key": LLM_SERVICE_API_KEY},
                 timeout=5.0
             )
@@ -155,14 +155,8 @@ async def get_llm_service_token(user: User) -> Optional[str]:
             response_data = response.json()
             return response_data.get("access_token")
         except httpx.HTTPStatusError as e:
-            # Re-raise with a more specific error from the LLM service
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail=f"Error from LLM service token endpoint: {e.response.text}"
-            )
+            print(f"Could not get token from LLM service. Status: {e.response.status_code}, Detail: {e.response.text}")
+            return None
         except httpx.RequestError as e:
-            # Re-raise with a specific network connection error
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Could not connect to LLM service at {llm_service_url}. Check service status and URL."
-            )
+            print(f"An error occurred while calling LLM service for token: {e}")
+            return None
