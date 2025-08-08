@@ -20,7 +20,6 @@ core_backend/*.pyd
 core_backend/.pytest_cache/
 core_backend/chroma_db/
 core_backend/core_backend.egg-info/
-core_backend/seed.py
 core_backend/test_api.ps1
 
 
