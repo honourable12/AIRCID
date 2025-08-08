@@ -9,10 +9,11 @@ from app.core.database import get_async_session
 from app.core.security import verify_password, create_access_token, get_password_hash
 from app.models.user import User, UserCreate, UserRead
 from app.models.role import Role
-from app.api.dependencies.auth import get_llm_service_token, LLMServiceTokenRequest
+from app.api.dependencies.auth import get_llm_service_token 
 from app.api.dependencies.auth import get_researcher_or_admin_user, get_admin_user, get_current_user
 from pydantic import BaseModel
 from typing import Optional, List
+import os # Import os to get environment variables
 
 router = APIRouter()
 
@@ -21,6 +22,7 @@ class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserRead
+    llm_access_token: Optional[str] = None # New field for the LLM service token
 
 @router.post("/token", response_model=Token, summary="Authenticate user and get access token")
 async def login_for_access_token(
@@ -28,13 +30,13 @@ async def login_for_access_token(
     session: AsyncSession = Depends(get_async_session)
 ):
     """
-    Authenticates a user and returns a JWT access token.
-    The response also includes the authenticated user's details.
+    Authenticates a user and returns a JWT access token for the Core Backend,
+    and a separate JWT for the LLM service.
     """
     user_query = await session.execute(
         select(User)
         .where(User.email == form_data.username)
-        .options(selectinload(User.role))
+        .options(selectinload(User.role)) # Eagerly load the user's role
     )
     user = user_query.scalars().first()
 
@@ -48,19 +50,30 @@ async def login_for_access_token(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
 
-    # The token expiration is now consistent with the value in the dependencies file
-    ACCESS_TOKEN_EXPIRE_MINUTES = 30
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    # 1. Generate the JWT token for the CORE BACKEND
+    # This token is used for authentication against core backend's endpoints.
+    # We use 'user_id' in the payload as expected by get_current_user in dependencies.
+    core_access_token_expires_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
+    core_access_token_expires = timedelta(minutes=core_access_token_expires_minutes)
     
-    # Use 'sub' for the username, which is what the dependency 'get_current_user' expects
-    access_token = await get_llm_service_token(user)
+    core_access_token = create_access_token(
+        data={"user_id": user.id}, # Payload for core backend token
+        expires_delta=core_access_token_expires
+    )
     
-    if not access_token:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve access token from LLM service.")
+    # 2. Fetch the JWT token from the LLM SERVICE
+    # This token is specific to the LLM microservice.
+    llm_access_token = await get_llm_service_token(user)
+    
     # Ensure the role is loaded for the UserRead model
     user_read = UserRead.model_validate(user)
 
-    return {"access_token": access_token, "token_type": "bearer", "user": user_read}
+    return {
+        "access_token": core_access_token,
+        "token_type": "bearer",
+        "user": user_read,
+        "llm_access_token": llm_access_token # Return the LLM service token
+    }
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED, summary="Create a new user")
@@ -95,7 +108,7 @@ async def create_user(
     )
     session.add(new_user)
     await session.commit()
-    await session.refresh(new_user, attribute_names=["role"])
+    await session.refresh(new_user, attribute_names=["role"]) # Refresh to load the role relationship
     
     user_read = UserRead.model_validate(new_user)
     return user_read
