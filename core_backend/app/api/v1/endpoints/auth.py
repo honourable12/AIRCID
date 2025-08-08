@@ -9,10 +9,10 @@ from app.core.database import get_async_session
 from app.core.security import verify_password, create_access_token, get_password_hash
 from app.models.user import User, UserCreate, UserRead
 from app.models.role import Role
-from app.api.dependencies.auth import create_llm_service_user, get_llm_service_token # Import the new functions
-
+from app.api.dependencies.auth import get_llm_service_token, LLMServiceTokenRequest
+from app.api.dependencies.auth import get_researcher_or_admin_user, get_admin_user, get_current_user
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 router = APIRouter()
 
@@ -20,18 +20,24 @@ router = APIRouter()
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    llm_service_token: Optional[str] = None # Added for LLM service token
-
-class UserRegister(UserCreate):
-    pass
+    user: UserRead
 
 @router.post("/token", response_model=Token, summary="Authenticate user and get access token")
 async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     session: AsyncSession = Depends(get_async_session)
 ):
-    user_query = await session.execute(select(User).where(User.email == form_data.username))
+    """
+    Authenticates a user and returns a JWT access token.
+    The response also includes the authenticated user's details.
+    """
+    user_query = await session.execute(
+        select(User)
+        .where(User.email == form_data.username)
+        .options(selectinload(User.role))
+    )
     user = user_query.scalars().first()
+
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -39,72 +45,57 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Eagerly load the user's role for the LLM service calls
-    user_with_role_query = await session.execute(
-        select(User).where(User.email == user.email).options(selectinload(User.role))
-    )
-    user_with_role = user_with_role_query.scalars().first()
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
 
-    # After successful authentication, synchronize the user with the LLM service and get a token
-    await create_llm_service_user(user_with_role)
-    llm_service_token = await get_llm_service_token(user_with_role)
+    # The token expiration is now consistent with the value in the dependencies file
+    ACCESS_TOKEN_EXPIRE_MINUTES = 30
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    # Use 'sub' for the username, which is what the dependency 'get_current_user' expects
+    access_token = await get_llm_service_token(user)
+    
+    if not access_token:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve access token from LLM service.")
+    # Ensure the role is loaded for the UserRead model
+    user_read = UserRead.model_validate(user)
 
-    access_token = create_access_token(
-        data={"sub": user.email, "user_id": user.id, "role_id": user.role_id}
-    )
-    return {
-        "access_token": access_token, 
-        "token_type": "bearer",
-        "llm_service_token": llm_service_token # Return the token to the client
-    }
+    return {"access_token": access_token, "token_type": "bearer", "user": user_read}
 
-@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED, summary="Register a new user")
-async def register_user(
-    user_data: UserRegister,
+
+@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED, summary="Create a new user")
+async def create_user(
+    user_create: UserCreate,
     session: AsyncSession = Depends(get_async_session)
 ):
     """
-    Registers a new user with the provided details. By default, new users are assigned the 'researcher' role
-    unless a specific role_id is provided.
+    Register a new user. This endpoint is public and does not require authentication.
     """
-    # Check if user already exists
-    existing_user = await session.execute(select(User).where(User.email == user_data.email))
-    if existing_user.scalars().first():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
+    # Check if a user with the same email already exists
+    existing_user_query = await session.execute(select(User).where(User.email == user_create.email))
+    if existing_user_query.scalars().first():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
-    # Hash password
-    hashed_password = get_password_hash(user_data.password)
+    # Hash the password
+    hashed_password = get_password_hash(user_create.password)
 
-    # Determine role_id: default to 'researcher' if not specified
-    if user_data.role_id is None:
-        researcher_role_query = await session.execute(select(Role).where(Role.name == "researcher"))
-        researcher_role = researcher_role_query.scalars().first()
-        if not researcher_role:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Researcher role not found. Please seed the database with 'researcher' role."
-            )
-        user_data.role_id = researcher_role.id
-
-    # Create new user instance
+    # Fetch the role object based on the provided role name
+    role_query = await session.execute(select(Role).where(Role.name == user_create.role_name))
+    role_obj = role_query.scalars().first()
+    if not role_obj:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{user_create.role_name}' not found")
+    
+    # Create the new user instance
     new_user = User(
-        email=user_data.email,
+        email=user_create.email,
+        username=user_create.username,
         hashed_password=hashed_password,
-        role_id=user_data.role_id
+        role_id=role_obj.id,
+        is_active=user_create.is_active
     )
     session.add(new_user)
+    await session.commit()
+    await session.refresh(new_user, attribute_names=["role"])
     
-    try:
-        await session.commit()
-        await session.refresh(new_user, attribute_names=["role"])
-    except Exception as e:
-        await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error registering user: {e}"
-        ) from e
-
-    return new_user
+    user_read = UserRead.model_validate(new_user)
+    return user_read
