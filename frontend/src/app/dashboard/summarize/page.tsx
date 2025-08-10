@@ -41,7 +41,7 @@ export default function SummarizePage() {
 
   const onSubmit = async (data: SummarizeFormValues) => {
     if (!llmToken) {
-      toast({ variant: 'destructive', title: 'Authentication Error', description: 'User not authenticated.' });
+      toast({ variant: 'destructive', title: 'Authentication Error', description: 'LLM service token is missing.' });
       return;
     }
     

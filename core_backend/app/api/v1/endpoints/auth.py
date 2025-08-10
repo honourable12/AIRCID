@@ -23,6 +23,9 @@ class Token(BaseModel):
     token_type: str = "bearer"
     user: UserRead
     llm_access_token: Optional[str] = None # New field for the LLM service token
+    
+class UserRegister(UserCreate):
+    pass
 
 @router.post("/token", response_model=Token, summary="Authenticate user and get access token")
 async def login_for_access_token(
@@ -76,39 +79,72 @@ async def login_for_access_token(
     }
 
 
-@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED, summary="Create a new user")
-async def create_user(
-    user_create: UserCreate,
+@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED, summary="Register a new user")
+async def register_user(
+    user_data: UserRegister,
     session: AsyncSession = Depends(get_async_session)
 ):
     """
-    Register a new user. This endpoint is public and does not require authentication.
+    Registers a new user with the provided details. By default, new users are assigned the 'researcher' role
+    unless a specific role_id is provided.
     """
-    # Check if a user with the same email already exists
-    existing_user_query = await session.execute(select(User).where(User.email == user_create.email))
-    if existing_user_query.scalars().first():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+    # Check if user already exists
+    existing_user = await session.execute(select(User).where(User.email == user_data.email))
+    if existing_user.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
 
-    # Hash the password
-    hashed_password = get_password_hash(user_create.password)
+    # Hash password
+    hashed_password = get_password_hash(user_data.password)
 
-    # Fetch the role object based on the provided role name
-    role_query = await session.execute(select(Role).where(Role.name == user_create.role_name))
-    role_obj = role_query.scalars().first()
-    if not role_obj:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{user_create.role_name}' not found")
-    
-    # Create the new user instance
+    # Determine role_id: default to 'researcher' if not specified
+    if user_data.role_id is None:
+        researcher_role_query = await session.execute(select(Role).where(Role.name == "researcher"))
+        researcher_role = researcher_role_query.scalars().first()
+        if not researcher_role:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Researcher role not found. Please seed the database with 'researcher' role."
+            )
+        user_data.role_id = researcher_role.id
+
+    # Create new user instance
     new_user = User(
-        email=user_create.email,
-        username=user_create.username,
+        email=user_data.email,
         hashed_password=hashed_password,
-        role_id=role_obj.id,
-        is_active=user_create.is_active
+        role_id=user_data.role_id
     )
     session.add(new_user)
-    await session.commit()
-    await session.refresh(new_user, attribute_names=["role"]) # Refresh to load the role relationship
     
-    user_read = UserRead.model_validate(new_user)
-    return user_read
+    try:
+        await session.commit()
+        # After commit, the new_user object might be detached, especially relationships.
+        # We need to re-query or explicitly load the relationship.
+
+        # Option A (Recommended for this case): Refresh with selectinload
+        # This will load the 'role' relationship immediately with the user.
+        await session.refresh(new_user, attribute_names=["role"]) # <--- CRUCIAL CHANGE: Load 'role' explicitly
+        
+        # Ensure the role object is fully loaded for Pydantic serialization
+        # The above refresh might be enough, but if not, an explicit select:
+        # result = await session.execute(
+        #     select(User)
+        #     .options(selectinload(User.role)) # Eagerly load the role
+        #     .where(User.id == new_user.id)
+        # )
+        # new_user = result.scalars().first()
+        # if not new_user:
+        #     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User not found after creation.")
+
+    except Exception as e:
+        await session.rollback()
+        # Catch foreign key violations more gracefully if needed, though the 'role_id=0' was the previous issue.
+        # Now it's likely that 'researcher' role wasn't found if it fails here.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error registering user: {e}"
+        ) from e
+
+    return new_user

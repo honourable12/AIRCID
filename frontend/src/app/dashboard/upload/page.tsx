@@ -40,7 +40,7 @@ export default function UploadPage() {
 
   const onSubmit = async (data: UploadFormValues) => {
     if (!llmToken) {
-      toast({ variant: 'destructive', title: 'Authentication Error', description: 'User not authenticated.' });
+      toast({ variant: 'destructive', title: 'Authentication Error', description: 'LLM service token is missing.' });
       return;
     }
 

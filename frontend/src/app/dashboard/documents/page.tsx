@@ -25,7 +25,11 @@ export default function DocumentsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchDocuments = useCallback(async () => {
-    if (!llmToken) return;
+    if (!llmToken) {
+        setError("LLM service token is missing. Please log in again.");
+        setIsLoading(false);
+        return;
+    }
 
     setIsLoading(true);
     setError(null);

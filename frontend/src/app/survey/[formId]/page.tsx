@@ -66,7 +66,7 @@ function SurveyPageContent() {
         return;
     }
     if (!token) {
-        setError("Authentication token is missing. Please log in.");
+        setError("Authentication token is missing. Please log in to take the survey.");
         setIsLoading(false);
         return;
     }
@@ -99,8 +99,10 @@ function SurveyPageContent() {
   }, [formId, reset, token]);
 
   useEffect(() => {
-    fetchFormData();
-  }, [fetchFormData]);
+    if(token) { // Only fetch if token is available
+      fetchFormData();
+    }
+  }, [fetchFormData, token]);
 
   const getOrCreateParticipantId = async (): Promise<number> => {
     if (participantIdFromUrl) {
@@ -322,9 +324,3 @@ export default function SurveyPage() {
       </Suspense>
     );
 }
-    
-
-    
-
-
-

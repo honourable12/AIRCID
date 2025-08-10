@@ -1,6 +1,7 @@
+
 "use client";
 
-import { createContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useState, useEffect, type ReactNode, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 
@@ -39,57 +40,72 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const router = useRouter();
   const { toast } = useToast();
+  
+  const logout = useCallback(() => {
+    setToken(null);
+    setLlmToken(null);
+    setUser(null);
+    setUserEmail(null);
+    setIsAuthenticated(false);
+    try {
+      localStorage.removeItem('token');
+      localStorage.removeItem('llm_access_token');
+      localStorage.removeItem('user');
+    } catch (error) {
+      console.error("Could not write to localStorage", error);
+    }
+    router.push('/login');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router]);
 
-  const fetchUser = async (userToken: string) => {
+  const validateToken = useCallback(async (tokenToValidate: string) => {
     try {
       const response = await fetch(`${CORE_BACKEND_URL}/api/v1/users/me`, {
-        headers: { Authorization: `Bearer ${userToken}` },
+        headers: { Authorization: `Bearer ${tokenToValidate}` },
       });
-      if (response.ok) {
-        const userData = await response.json();
-        setUser(userData);
-        setUserEmail(userData.email);
-        localStorage.setItem('user', JSON.stringify(userData));
-        setIsAuthenticated(true);
-        return userData;
-      } else {
-        console.error("Failed to fetch user data:", response.status, response.statusText);
-        return null;
+      if (!response.ok) {
+         console.error("Token validation failed:", response.status, response.statusText);
+         logout();
       }
+      // If token is valid, we don't need to do anything, the user is already set from localStorage.
     } catch (error) {
-      console.error("Error fetching user data:", error);
-      logout();
-      return null;
+       console.error("Error validating token:", error);
+       logout();
     }
-  };
+  }, [logout]);
+
 
   useEffect(() => {
     const loadFromStorage = async () => {
+      setIsLoading(true);
       try {
         const storedToken = localStorage.getItem('token');
-        const storedLlmToken = localStorage.getItem('llm_token');
+        const storedLlmToken = localStorage.getItem('llm_access_token');
+        const storedUser = localStorage.getItem('user');
 
-        if (storedToken) {
+        if (storedToken && storedLlmToken && storedUser) {
           setToken(storedToken);
           setLlmToken(storedLlmToken);
-          const fetchedUser = await fetchUser(storedToken);
-          if (fetchedUser) {
-            setUser(fetchedUser);
-            setUserEmail(fetchedUser.email);
-            setIsAuthenticated(true);
-          } else {
-            logout();
-          }
+          const parsedUser = JSON.parse(storedUser);
+          setUser(parsedUser);
+          setUserEmail(parsedUser.email);
+          setIsAuthenticated(true);
+          // Re-validate the token to ensure it's not expired
+          await validateToken(storedToken);
+        } else {
+           if (router.pathname !== '/login' && router.pathname !== '/register') {
+             logout();
+           }
         }
       } catch (error) {
-        console.error("Could not read from localStorage or fetch user:", error);
+        console.error("Could not read from localStorage or validate token:", error);
         logout();
       } finally {
         setIsLoading(false);
       }
     };
     loadFromStorage();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const login = async (username: string, password: string) => {
@@ -107,16 +123,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const coreAuthData = await coreAuthResponse.json();
       const newToken = coreAuthData.access_token;
-      const newLlmToken = coreAuthData.llm_service_token;
+      const newLlmToken = coreAuthData.llm_access_token;
+      const newUser = coreAuthData.user;
+
+      if (!newToken || !newLlmToken || !newUser) {
+          throw new Error('Incomplete authentication response from server.');
+      }
 
       setToken(newToken);
       setLlmToken(newLlmToken);
-      localStorage.setItem('token', newToken);
-      localStorage.setItem('llm_token', newLlmToken);
-
-      await fetchUser(newToken);
+      setUser(newUser);
+      setUserEmail(newUser.email);
+      setIsAuthenticated(true);
       
-      setUserEmail(username);
+      localStorage.setItem('token', newToken);
+      localStorage.setItem('llm_access_token', newLlmToken);
+      localStorage.setItem('user', JSON.stringify(newUser));
 
       router.push('/dashboard/studies');
     } catch (error) {
@@ -126,7 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         title: 'Login Failed',
         description: errorMessage,
       });
-      logout();
+      logout(); // Clear any partial state
     } finally {
       setIsLoading(false);
     }
@@ -161,22 +183,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const logout = () => {
-    setToken(null);
-    setLlmToken(null);
-    setUser(null);
-    setUserEmail(null);
-    setIsAuthenticated(false);
-    try {
-      localStorage.removeItem('token');
-      localStorage.removeItem('llm_token');
-      localStorage.removeItem('user');
-    } catch (error) {
-      console.error("Could not write to localStorage", error);
-    }
-    router.push('/login');
   };
 
   const value = {

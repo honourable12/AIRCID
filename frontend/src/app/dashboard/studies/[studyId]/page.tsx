@@ -102,7 +102,7 @@ type GenerateFormValues = z.infer<typeof generateFormSchema>;
 
 
 const GenerateFormDialog = ({ studyId, onFormGenerated }: { studyId: string, onFormGenerated: () => void }) => {
-    const { token } = useAuth();
+    const { llmToken } = useAuth();
     const { toast } = useToast();
     const [isDialogOpen, setIsDialogOpen] = useState(false);
 
@@ -116,17 +116,20 @@ const GenerateFormDialog = ({ studyId, onFormGenerated }: { studyId: string, onF
     const {formState: { isSubmitting }, handleSubmit, reset} = form;
 
     const onSubmit = async (data: GenerateFormValues) => {
-        if (!token) {
-            toast({ variant: 'destructive', title: 'Authentication Error', description: 'User not authenticated.' });
+        if (!llmToken) {
+            toast({ variant: 'destructive', title: 'Authentication Error', description: 'LLM service token is missing.' });
             return;
         }
 
         try {
+            // Note: The backend expects the token in the 'Authorization' header.
+            // The actual endpoint for form generation from prompt is now expected to be /api/v1/forms/from-llm
+            // which handles the LLM interaction itself.
             const response = await fetch(`${CORE_BACKEND_URL}/api/v1/forms/from-llm`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`,
+                    'Authorization': `Bearer ${llmToken}`,
                 },
                 body: JSON.stringify({
                     prompt: data.prompt,

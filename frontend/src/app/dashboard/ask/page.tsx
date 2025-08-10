@@ -75,7 +75,7 @@ export default function AskPage() {
     <div className="grid gap-6">
       <Card>
         <CardHeader>
-          <CardTitle>Ask a Question</CardTitle>
+          <CardTitle>AI Chat</CardTitle>
           <CardDescription>Get answers from the LLM based on the uploaded documents.</CardDescription>
         </CardHeader>
         <Form {...form}>
