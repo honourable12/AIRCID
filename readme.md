@@ -37,7 +37,7 @@ This service is the backbone of the application, handling core business logic, u
     - Manages all core data models: `User`, `Study`, `Form`, `Question`, `Participant`, `Role`, etc.
     - Handles user authentication and authorization logic.
     - Provides a robust REST API for the frontend to consume, managing all CRUD (Create, Read, Update, Delete) operations for the core platform data.
-    - See `core_backend/API_DOCUMENTATION.md` for detailed endpoint information.
+    - See `core_backend/README.md` for detailed endpoint information.
 
 ### 3. LLM Service (`/llm_service`)
 
@@ -48,7 +48,7 @@ This service centralizes all AI and Natural Language Processing (NLP) capabiliti
     - **Retrieval-Augmented Generation (RAG)**: Manages the ingestion of documents, creates vector embeddings, and stores them in ChromaDB.
     - **Q&A Functionality**: Provides an API endpoint that allows users to "chat" with their documents by answering natural language questions.
     - **Text Summarization**: Offers endpoints for summarizing long-form text, such as patient notes or research papers.
-    - See `llm_service/API_DOCUMENTATION.md` for detailed endpoint information.
+    - See `llm_service/README.md` for detailed endpoint information.
 
 ### 4. Patient Matching Service (`/python_microservices`)
 
@@ -59,4 +59,4 @@ This is a specialized microservice designed to intelligently match patients with
     - Processes patient data and clinical study eligibility criteria.
     - Utilizes NLP and business logic to determine and score potential matches.
     - Exposes an API endpoint that the frontend or other services can use to retrieve a list of eligible studies for a given patient.
-    - See `python_microservices/API_DOCUMENTATION.md` for detailed endpoint information.
+    - See `python_microservices/README.md` for detailed endpoint information.
