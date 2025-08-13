@@ -72,4 +72,4 @@ To run the frontend application locally for development:
 
 The application will be available at `http://localhost:9002`.
 
-This is link to the video preview: `https://youtu.be/z8321CXdor8`
+[This is link to the video preview](https://youtu.be/z8321CXdor8)
