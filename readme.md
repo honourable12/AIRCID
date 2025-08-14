@@ -60,3 +60,5 @@ This is a specialized microservice designed to intelligently match patients with
     - Utilizes NLP and business logic to determine and score potential matches.
     - Exposes an API endpoint that the frontend or other services can use to retrieve a list of eligible studies for a given patient.
     - See `python_microservices/README.md` for detailed endpoint information.
+
+This is link to the video preview: `https://youtu.be/z8321CXdor8`
